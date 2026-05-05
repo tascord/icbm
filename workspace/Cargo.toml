@@ -1,0 +1,22 @@
+[workspace]
+members = [
+    "crates/utils",
+    "crates/models",
+    "crates/compute",
+    "crates/async-worker",
+    "crates/app",
+]
+resolver = "2"
+
+[workspace.dependencies]
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+tokio       = { version = "1", features = ["full"] }
+rayon       = "1"
+rand        = "0.9"
+thiserror   = "2"
+anyhow      = "1"
+futures     = "0.3"
+uuid        = { version = "1", features = ["v4", "serde"] }
+tracing     = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -1,0 +1,38 @@
+[package]
+name = "icbm"
+version = "0.1.0"
+edition = "2021"
+description = "Integrated Container BenchMark – identifies machines well-suited for Rust development"
+repository = "https://github.com/tascord/icbm"
+license = "MIT"
+
+[[bin]]
+name = "icbm"
+path = "src/main.rs"
+
+[dependencies]
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialisation
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+anyhow = "1"
+
+# System info / metrics
+sysinfo = "0.35"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Terminal colours and progress bars
+colored = "2"
+indicatif = { version = "0.17", features = ["tokio"] }
+
+# SSH client (to talk to VMs)
+ssh2 = "0.9"
