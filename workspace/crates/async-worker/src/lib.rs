@@ -6,32 +6,22 @@
 //! * Generic bounds across async boundaries (`Send + Sync + 'static`)
 //! * Error propagation with `anyhow`
 
-use std::{
-    future::Future,
-    pin::Pin,
-    sync::Arc,
-    time::Duration,
+use {
+    anyhow::Result,
+    futures::StreamExt,
+    models::{Status, Task},
+    std::{future::Future, pin::Pin, sync::Arc, time::Duration},
+    tokio::{sync::mpsc, time::timeout},
+    tracing::{debug, error},
+    utils::Id,
 };
-
-use anyhow::Result;
-use futures::StreamExt;
-use tokio::{
-    sync::mpsc,
-    time::timeout,
-};
-use tracing::{debug, error};
-
-use models::{Status, Task};
-use utils::Id;
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 /// A boxed async handler function.
-pub type Handler<I, O> = Arc<
-    dyn Fn(I) -> Pin<Box<dyn Future<Output = Result<O>> + Send>> + Send + Sync,
->;
+pub type Handler<I, O> = Arc<dyn Fn(I) -> Pin<Box<dyn Future<Output = Result<O>> + Send>> + Send + Sync>;
 
 /// A simple in-process job queue backed by a Tokio MPSC channel.
 pub struct JobQueue<I: Send + 'static, O: Send + 'static> {
@@ -76,11 +66,7 @@ impl<I: Send + 'static + Clone, O: Send + 'static> JobQueue<I, O> {
                         }
                         Some(job) => {
                             let outcome = handler(job.payload).await;
-                            if result_tx
-                                .send(JobResult { id: job.id, outcome })
-                                .await
-                                .is_err()
-                            {
+                            if result_tx.send(JobResult { id: job.id, outcome }).await.is_err() {
                                 error!("Worker {}: result channel closed", w);
                                 break;
                             }
@@ -90,19 +76,13 @@ impl<I: Send + 'static + Clone, O: Send + 'static> JobQueue<I, O> {
             });
         }
 
-        JobQueue {
-            tx,
-            results_rx: Arc::new(tokio::sync::Mutex::new(result_rx)),
-        }
+        JobQueue { tx, results_rx: Arc::new(tokio::sync::Mutex::new(result_rx)) }
     }
 
     /// Enqueues a job and returns its ID.
     pub async fn enqueue(&self, payload: I) -> Result<Id> {
         let id = Id::new();
-        self.tx
-            .send(Job { id, payload })
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to enqueue job: {}", e))?;
+        self.tx.send(Job { id, payload }).await.map_err(|e| anyhow::anyhow!("Failed to enqueue job: {}", e))?;
         Ok(id)
     }
 
@@ -174,9 +154,7 @@ pub struct Ticker {
 }
 
 impl Ticker {
-    pub fn new(interval: Duration, limit: usize) -> Self {
-        Ticker { interval, limit }
-    }
+    pub fn new(interval: Duration, limit: usize) -> Self { Ticker { interval, limit } }
 
     /// Returns a stream of tick counts.
     pub fn stream(self) -> impl futures::Stream<Item = usize> {
@@ -202,18 +180,10 @@ pub struct TaskRunner<P: Clone + serde::Serialize + std::fmt::Debug + Send + 'st
 impl<P: Clone + serde::Serialize + std::fmt::Debug + Send + 'static> TaskRunner<P> {
     pub fn new() -> (Self, mpsc::Receiver<(Id, Status)>) {
         let (tx, rx) = mpsc::channel(64);
-        (
-            TaskRunner {
-                notify_tx: tx,
-                tasks: vec![],
-            },
-            rx,
-        )
+        (TaskRunner { notify_tx: tx, tasks: vec![] }, rx)
     }
 
-    pub fn add(&mut self, task: Task<P>) {
-        self.tasks.push(task);
-    }
+    pub fn add(&mut self, task: Task<P>) { self.tasks.push(task); }
 
     pub async fn run_all<F, Fut>(&mut self, f: F)
     where
@@ -231,23 +201,15 @@ impl<P: Clone + serde::Serialize + std::fmt::Debug + Send + 'static> TaskRunner<
 
             tokio::spawn(async move {
                 let result = f(payload).await;
-                let next = if result.is_ok() {
-                    Status::Completed
-                } else {
-                    Status::Failed
-                };
+                let next = if result.is_ok() { Status::Completed } else { Status::Failed };
                 let _ = tx.send((id, next)).await;
             });
         }
     }
 }
 
-impl<P: Clone + serde::Serialize + std::fmt::Debug + Send + 'static> Default
-    for TaskRunner<P>
-{
-    fn default() -> Self {
-        Self::new().0
-    }
+impl<P: Clone + serde::Serialize + std::fmt::Debug + Send + 'static> Default for TaskRunner<P> {
+    fn default() -> Self { Self::new().0 }
 }
 
 // ---------------------------------------------------------------------------
@@ -256,15 +218,12 @@ impl<P: Clone + serde::Serialize + std::fmt::Debug + Send + 'static> Default
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::sync::Arc;
+    use {super::*, std::sync::Arc};
 
     #[tokio::test]
     async fn test_pipeline() {
-        let double: Handler<u32, u32> =
-            Arc::new(|x| Box::pin(async move { Ok(x * 2) }));
-        let stringify: Handler<u32, String> =
-            Arc::new(|x| Box::pin(async move { Ok(x.to_string()) }));
+        let double: Handler<u32, u32> = Arc::new(|x| Box::pin(async move { Ok(x * 2) }));
+        let stringify: Handler<u32, String> = Arc::new(|x| Box::pin(async move { Ok(x.to_string()) }));
 
         let results = pipeline(4, 0u32..5, double, stringify).await;
         let values: Vec<String> = results.into_iter().map(|r| r.unwrap()).collect();
@@ -276,10 +235,7 @@ mod tests {
     #[tokio::test]
     async fn test_ticker() {
         use futures::StreamExt;
-        let ticks: Vec<usize> = Ticker::new(Duration::from_millis(1), 3)
-            .stream()
-            .collect()
-            .await;
+        let ticks: Vec<usize> = Ticker::new(Duration::from_millis(1), 3).stream().collect().await;
         assert_eq!(ticks, vec![0, 1, 2]);
     }
 }

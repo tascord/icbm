@@ -20,10 +20,7 @@ pub fn parallel_sort<T: Ord + Clone + Send + Sync>(data: &[T]) -> Vec<T> {
     }
 
     let mid = data.len() / 2;
-    let (left, right) = rayon::join(
-        || parallel_sort(&data[..mid]),
-        || parallel_sort(&data[mid..]),
-    );
+    let (left, right) = rayon::join(|| parallel_sort(&data[..mid]), || parallel_sort(&data[mid..]));
     merge(left, right)
 }
 
@@ -58,28 +55,16 @@ pub struct Matrix {
 }
 
 impl Matrix {
-    pub fn zeros(rows: usize, cols: usize) -> Self {
-        Matrix {
-            rows,
-            cols,
-            data: vec![0.0; rows * cols],
-        }
-    }
+    pub fn zeros(rows: usize, cols: usize) -> Self { Matrix { rows, cols, data: vec![0.0; rows * cols] } }
 
     pub fn from_fn<F: Fn(usize, usize) -> f64 + Copy>(rows: usize, cols: usize, f: F) -> Self {
-        let data = (0..rows)
-            .flat_map(|r| (0..cols).map(move |c| f(r, c)))
-            .collect();
+        let data = (0..rows).flat_map(|r| (0..cols).map(move |c| f(r, c))).collect();
         Matrix { rows, cols, data }
     }
 
-    pub fn get(&self, row: usize, col: usize) -> f64 {
-        self.data[row * self.cols + col]
-    }
+    pub fn get(&self, row: usize, col: usize) -> f64 { self.data[row * self.cols + col] }
 
-    pub fn set(&mut self, row: usize, col: usize, val: f64) {
-        self.data[row * self.cols + col] = val;
-    }
+    pub fn set(&mut self, row: usize, col: usize, val: f64) { self.data[row * self.cols + col] = val; }
 
     /// Parallel matrix multiply using Rayon.
     pub fn mul(&self, other: &Matrix) -> Matrix {
@@ -91,9 +76,7 @@ impl Matrix {
         let data: Vec<f64> = (0..rows)
             .into_par_iter()
             .flat_map(|r| {
-                (0..cols)
-                    .map(|c| (0..k).map(|i| self.get(r, i) * other.get(i, c)).sum::<f64>())
-                    .collect::<Vec<_>>()
+                (0..cols).map(|c| (0..k).map(|i| self.get(r, i) * other.get(i, c)).sum::<f64>()).collect::<Vec<_>>()
             })
             .collect();
 
@@ -101,14 +84,10 @@ impl Matrix {
     }
 
     /// Transpose.
-    pub fn transpose(&self) -> Matrix {
-        Matrix::from_fn(self.cols, self.rows, |r, c| self.get(c, r))
-    }
+    pub fn transpose(&self) -> Matrix { Matrix::from_fn(self.cols, self.rows, |r, c| self.get(c, r)) }
 
     /// Frobenius norm.
-    pub fn frobenius_norm(&self) -> f64 {
-        self.data.iter().map(|v| v * v).sum::<f64>().sqrt()
-    }
+    pub fn frobenius_norm(&self) -> f64 { self.data.iter().map(|v| v * v).sum::<f64>().sqrt() }
 }
 
 // ---------------------------------------------------------------------------
@@ -124,15 +103,9 @@ pub fn histogram(data: &[f64], bins: usize) -> (Vec<f64>, Vec<usize>) {
 
     let min = data.iter().cloned().fold(f64::INFINITY, f64::min);
     let max = data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-    let range = if (max - min).abs() < f64::EPSILON {
-        1.0
-    } else {
-        max - min
-    };
+    let range = if (max - min).abs() < f64::EPSILON { 1.0 } else { max - min };
 
-    let edges: Vec<f64> = (0..=bins)
-        .map(|i| min + range * i as f64 / bins as f64)
-        .collect();
+    let edges: Vec<f64> = (0..=bins).map(|i| min + range * i as f64 / bins as f64).collect();
 
     let mut counts = vec![0usize; bins];
     for &v in data {
@@ -150,11 +123,7 @@ pub fn pearson(x: &[f64], y: &[f64]) -> f64 {
     let n = x.len() as f64;
     let mean_x: f64 = x.par_iter().sum::<f64>() / n;
     let mean_y: f64 = y.par_iter().sum::<f64>() / n;
-    let num: f64 = x
-        .par_iter()
-        .zip(y.par_iter())
-        .map(|(xi, yi)| (xi - mean_x) * (yi - mean_y))
-        .sum();
+    let num: f64 = x.par_iter().zip(y.par_iter()).map(|(xi, yi)| (xi - mean_x) * (yi - mean_y)).sum();
     let dx: f64 = x.par_iter().map(|xi| (xi - mean_x).powi(2)).sum::<f64>().sqrt();
     let dy: f64 = y.par_iter().map(|yi| (yi - mean_y).powi(2)).sum::<f64>().sqrt();
     if dx.abs() < f64::EPSILON || dy.abs() < f64::EPSILON {
@@ -189,11 +158,7 @@ pub fn sieve(limit: usize) -> Vec<usize> {
         i += 1;
     }
 
-    is_prime
-        .iter()
-        .enumerate()
-        .filter_map(|(n, &p)| if p { Some(n) } else { None })
-        .collect()
+    is_prime.iter().enumerate().filter_map(|(n, &p)| if p { Some(n) } else { None }).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -209,12 +174,9 @@ pub struct ParallelMergeSorter;
 pub struct StdSorter;
 
 impl<T: Ord + Clone + Send + Sync> Sorter<T> for ParallelMergeSorter {
-    fn sort(&self, data: &[T]) -> Vec<T> {
-        parallel_sort(data)
-    }
-    fn name(&self) -> &'static str {
-        "parallel_merge_sort"
-    }
+    fn sort(&self, data: &[T]) -> Vec<T> { parallel_sort(data) }
+
+    fn name(&self) -> &'static str { "parallel_merge_sort" }
 }
 
 impl<T: Ord + Clone + Send + Sync> Sorter<T> for StdSorter {
@@ -223,16 +185,12 @@ impl<T: Ord + Clone + Send + Sync> Sorter<T> for StdSorter {
         v.sort();
         v
     }
-    fn name(&self) -> &'static str {
-        "std_sort"
-    }
+
+    fn name(&self) -> &'static str { "std_sort" }
 }
 
 /// Run `sorter` on `data` and verify the result is sorted.
-pub fn run_sorter<T: Ord + Clone + Send + Sync>(
-    sorter: &dyn Sorter<T>,
-    data: &[T],
-) -> (Vec<T>, bool) {
+pub fn run_sorter<T: Ord + Clone + Send + Sync>(sorter: &dyn Sorter<T>, data: &[T]) -> (Vec<T>, bool) {
     let result = sorter.sort(data);
     let sorted = result.windows(2).all(|w| w[0] <= w[1]);
     (result, sorted)
