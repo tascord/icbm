@@ -1,6 +1,8 @@
-use anyhow::Result;
-use clap::{Parser, Subcommand};
-use colored::Colorize;
+use {
+    anyhow::Result,
+    clap::{Parser, Subcommand},
+    colored::Colorize,
+};
 
 mod bench;
 mod metrics;
@@ -34,6 +36,10 @@ enum Commands {
         #[arg(long, default_value = "ubuntu,nixos")]
         flavours: String,
 
+        /// VM provider: auto, libvirt, utm
+        #[arg(long, default_value = "auto")]
+        provider: String,
+
         /// Keep the VMs alive after the benchmark finishes.
         #[arg(long, default_value_t = false)]
         keep_vms: bool,
@@ -57,30 +63,20 @@ enum Commands {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    println!(
-        "\n{}  {}\n",
-        "🚀 ICBM".bold().cyan(),
-        "Integrated Container BenchMark".dimmed()
-    );
+    println!("\n{}  {}\n", "🚀 ICBM".bold().cyan(), "Integrated Container BenchMark".dimmed());
 
     match cli.command.unwrap_or(Commands::Run {
         flavours: "ubuntu,nixos".to_string(),
+        provider: "auto".to_string(),
         keep_vms: false,
         json_out: None,
         skip_provision: false,
     }) {
-        Commands::Run {
-            flavours,
-            keep_vms,
-            json_out,
-            skip_provision,
-        } => {
-            let requested: Vec<vm::Flavour> = flavours
-                .split(',')
-                .map(|s| s.trim().parse())
-                .collect::<Result<_, _>>()?;
+        Commands::Run { flavours, provider, keep_vms, json_out, skip_provision } => {
+            let requested: Vec<vm::Flavour> = flavours.split(',').map(|s| s.trim().parse()).collect::<Result<_, _>>()?;
+            let provider: vm::Provider = provider.parse()?;
 
-            run_benchmark(requested, keep_vms, json_out, skip_provision).await?;
+            run_benchmark(requested, provider, keep_vms, json_out, skip_provision).await?;
         }
 
         Commands::HostInfo => {
@@ -94,6 +90,7 @@ async fn main() -> Result<()> {
 
 async fn run_benchmark(
     flavours: Vec<vm::Flavour>,
+    provider: vm::Provider,
     keep_vms: bool,
     json_out: Option<std::path::PathBuf>,
     skip_provision: bool,
@@ -101,16 +98,12 @@ async fn run_benchmark(
     let mut all_results = vec![];
 
     for flavour in &flavours {
-        println!(
-            "\n{} {}",
-            "▶  Benchmarking flavour:".bold(),
-            flavour.to_string().yellow().bold()
-        );
+        println!("\n{} {}", "▶  Benchmarking flavour:".bold(), flavour.to_string().yellow().bold());
 
         // ------------------------------------------------------------------
         // 1. Provision VM (unless caller asked to skip)
         // ------------------------------------------------------------------
-        let domain = vm::Domain::new(flavour.clone());
+        let domain = vm::Domain::new(flavour.clone(), provider.clone());
 
         if !skip_provision {
             domain.provision().await?;
@@ -146,11 +139,7 @@ async fn run_benchmark(
     if let Some(path) = json_out {
         let json = serde_json::to_string_pretty(&all_results)?;
         std::fs::write(&path, json)?;
-        println!(
-            "\n{} {}",
-            "📄 JSON report written to".dimmed(),
-            path.display().to_string().underline()
-        );
+        println!("\n{} {}", "📄 JSON report written to".dimmed(), path.display().to_string().underline());
     }
 
     Ok(())

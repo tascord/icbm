@@ -65,11 +65,7 @@ pub fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
     }
-    let end = s
-        .char_indices()
-        .nth(max.saturating_sub(1))
-        .map(|(i, _)| i)
-        .unwrap_or(s.len());
+    let end = s.char_indices().nth(max.saturating_sub(1)).map(|(i, _)| i).unwrap_or(s.len());
     format!("{}…", &s[..end])
 }
 
@@ -116,39 +112,21 @@ pub struct Registry<V: Clone + Send + Sync> {
 }
 
 impl<V: Clone + Send + Sync> Registry<V> {
-    pub fn new() -> Self {
-        Self {
-            inner: HashMap::new(),
-        }
-    }
+    pub fn new() -> Self { Self { inner: HashMap::new() } }
 
-    pub fn insert(&mut self, key: impl Into<String>, value: V) {
-        self.inner.insert(key.into(), value);
-    }
+    pub fn insert(&mut self, key: impl Into<String>, value: V) { self.inner.insert(key.into(), value); }
 
-    pub fn get(&self, key: &str) -> Option<&V> {
-        self.inner.get(key)
-    }
+    pub fn get(&self, key: &str) -> Option<&V> { self.inner.get(key) }
 
-    pub fn remove(&mut self, key: &str) -> Option<V> {
-        self.inner.remove(key)
-    }
+    pub fn remove(&mut self, key: &str) -> Option<V> { self.inner.remove(key) }
 
-    pub fn len(&self) -> usize {
-        self.inner.len()
-    }
+    pub fn len(&self) -> usize { self.inner.len() }
 
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
+    pub fn is_empty(&self) -> bool { self.inner.is_empty() }
 
-    pub fn keys(&self) -> impl Iterator<Item = &String> {
-        self.inner.keys()
-    }
+    pub fn keys(&self) -> impl Iterator<Item = &String> { self.inner.keys() }
 
-    pub fn values(&self) -> impl Iterator<Item = &V> {
-        self.inner.values()
-    }
+    pub fn values(&self) -> impl Iterator<Item = &V> { self.inner.values() }
 }
 
 // ---------------------------------------------------------------------------
@@ -169,21 +147,15 @@ pub trait Describable {
 pub struct Id(Uuid);
 
 impl Id {
-    pub fn new() -> Self {
-        Id(Uuid::new_v4())
-    }
+    pub fn new() -> Self { Id(Uuid::new_v4()) }
 }
 
 impl Default for Id {
-    fn default() -> Self {
-        Self::new()
-    }
+    fn default() -> Self { Self::new() }
 }
 
 impl std::fmt::Display for Id {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.0) }
 }
 
 // ---------------------------------------------------------------------------

@@ -7,10 +7,11 @@
 //! * Builder pattern
 //! * Complex lifetimes and `impl Trait`
 
-use std::collections::BTreeMap;
-
-use serde::{Deserialize, Serialize};
-use utils::{Describable, Id};
+use {
+    serde::{Deserialize, Serialize},
+    std::collections::BTreeMap,
+    utils::{Describable, Id},
+};
 
 // ---------------------------------------------------------------------------
 // Status
@@ -79,28 +80,19 @@ impl<P: Serialize + Clone + std::fmt::Debug> Task<P> {
         use Status::*;
         let allowed = matches!(
             (self.status, next),
-            (Pending, Running)
-                | (Running, Completed)
-                | (Running, Failed)
-                | (Pending, Cancelled)
-                | (Running, Cancelled)
+            (Pending, Running) | (Running, Completed) | (Running, Failed) | (Pending, Cancelled) | (Running, Cancelled)
         );
         if allowed {
             self.status = next;
             Ok(())
         } else {
-            Err(StatusError::InvalidTransition {
-                from: self.status,
-                to: next,
-            })
+            Err(StatusError::InvalidTransition { from: self.status, to: next })
         }
     }
 }
 
 impl<P: Serialize + Clone + std::fmt::Debug> Describable for Task<P> {
-    fn describe(&self) -> String {
-        format!("Task[{}] '{}' ({})", self.id, self.name, self.status)
-    }
+    fn describe(&self) -> String { format!("Task[{}] '{}' ({})", self.id, self.name, self.status) }
 }
 
 // ---------------------------------------------------------------------------
@@ -128,19 +120,12 @@ pub struct Metric {
 
 impl Metric {
     pub fn new(name: impl Into<String>, value: f64, unit: impl Into<String>) -> Self {
-        Metric {
-            name: name.into(),
-            value,
-            unit: unit.into(),
-            tags: vec![],
-        }
+        Metric { name: name.into(), value, unit: unit.into(), tags: vec![] }
     }
 }
 
 impl Describable for Metric {
-    fn describe(&self) -> String {
-        format!("{}: {} {}", self.name, self.value, self.unit)
-    }
+    fn describe(&self) -> String { format!("{}: {} {}", self.name, self.value, self.unit) }
 }
 
 // ---------------------------------------------------------------------------
@@ -154,12 +139,7 @@ pub struct Tree<T: Clone> {
 }
 
 impl<T: Clone> Tree<T> {
-    pub fn leaf(value: T) -> Self {
-        Tree {
-            value,
-            children: vec![],
-        }
-    }
+    pub fn leaf(value: T) -> Self { Tree { value, children: vec![] } }
 
     pub fn with_child(mut self, child: Tree<T>) -> Self {
         self.children.push(child);
@@ -184,9 +164,7 @@ impl<T: Clone> Tree<T> {
     }
 
     /// Returns the total number of nodes.
-    pub fn size(&self) -> usize {
-        1 + self.children.iter().map(Tree::size).sum::<usize>()
-    }
+    pub fn size(&self) -> usize { 1 + self.children.iter().map(Tree::size).sum::<usize>() }
 }
 
 // ---------------------------------------------------------------------------
@@ -202,14 +180,7 @@ pub struct Event<D: Clone + Serialize> {
 }
 
 impl<D: Clone + Serialize> Event<D> {
-    pub fn new(kind: impl Into<String>, data: D) -> Self {
-        Event {
-            id: Id::new(),
-            kind: kind.into(),
-            data,
-            version: 1,
-        }
-    }
+    pub fn new(kind: impl Into<String>, data: D) -> Self { Event { id: Id::new(), kind: kind.into(), data, version: 1 } }
 }
 
 // ---------------------------------------------------------------------------
@@ -238,9 +209,7 @@ mod tests {
 
     #[test]
     fn tree_depth_and_size() {
-        let tree = Tree::leaf(1)
-            .with_child(Tree::leaf(2).with_child(Tree::leaf(3)))
-            .with_child(Tree::leaf(4));
+        let tree = Tree::leaf(1).with_child(Tree::leaf(2).with_child(Tree::leaf(3))).with_child(Tree::leaf(4));
         assert_eq!(tree.depth(), 2);
         assert_eq!(tree.size(), 4);
     }

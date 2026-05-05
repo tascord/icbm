@@ -4,14 +4,30 @@
 #
 # Usage:
 #   curl -sSf https://raw.githubusercontent.com/tascord/icbm/main/install.sh | sh
+#   curl -sSf https://raw.githubusercontent.com/tascord/icbm/main/install.sh | sh -s -- --install-deps
+#
+# Flags:
+#   --install-deps   Automatically install missing system dependencies without prompting.
 #
 # The script will:
 #   1. Check for / install Rust via rustup.
-#   2. Sparse-clone only the tool source from this repository.
-#   3. Build icbm in release mode.
-#   4. Run the benchmark.
+#   2. Optionally install system dependencies (libvirt/qemu on Linux, homebrew packages on macOS).
+#   3. Sparse-clone only the tool source from this repository.
+#   4. Build icbm in release mode.
+#   5. Run the benchmark.
 
 set -eu
+
+# ---------------------------------------------------------------------------
+# Parse flags
+# ---------------------------------------------------------------------------
+
+AUTO_DEPS=0
+for arg in "$@"; do
+  case "$arg" in
+    --install-deps) AUTO_DEPS=1 ;;
+  esac
+done
 
 REPO="https://github.com/tascord/icbm"
 CLONE_DIR="${ICBM_DIR:-$HOME/.local/share/icbm}"
@@ -49,21 +65,73 @@ fi
 . "$HOME/.cargo/env" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# 2. Check libvirt / virsh
+# 2. Check / install libvirt + qemu deps
 # ---------------------------------------------------------------------------
 
+DEPS_MISSING=0
 for tool in virsh virt-install qemu-img; do
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    echo ""
-    echo "  ⚠️  '$tool' not found."
-    echo "  On Debian/Ubuntu:  sudo apt install qemu-kvm libvirt-daemon-system virtinst"
-    echo "  On NixOS:          nix-env -iA nixpkgs.libvirt nixpkgs.virt-manager"
-    echo "  On Fedora/RHEL:    sudo dnf install qemu-kvm libvirt virt-install"
-    echo ""
-    echo "  After installing, re-run this script."
-    exit 1
-  fi
+  command -v "$tool" >/dev/null 2>&1 || { DEPS_MISSING=1; break; }
 done
+
+if [ "$DEPS_MISSING" -eq 1 ]; then
+  OS="$(uname -s)"
+
+  install_deps_linux() {
+    if command -v apt-get >/dev/null 2>&1; then
+      sudo apt-get update
+      sudo apt-get install -y qemu-kvm libvirt-daemon-system virtinst
+    elif command -v dnf >/dev/null 2>&1; then
+      sudo dnf install -y qemu-kvm libvirt virt-install
+    elif command -v nix-env >/dev/null 2>&1; then
+      nix-env -iA nixpkgs.libvirt nixpkgs.virt-manager nixpkgs.qemu
+    else
+      err "Could not detect a supported package manager. Please install qemu-kvm, libvirt and virt-install manually."
+    fi
+  }
+
+  install_deps_macos() {
+    if ! command -v brew >/dev/null 2>&1; then
+      info "Homebrew not found – installing …"
+      /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    fi
+    brew install qemu libvirt
+    brew services start libvirt
+  }
+
+  if [ "$AUTO_DEPS" -eq 1 ]; then
+    INSTALL_DEPS=y
+  else
+    echo ""
+    echo "  ⚠️  One or more required tools (virsh, virt-install, qemu-img) were not found."
+    if [ "$OS" = "Darwin" ]; then
+      echo "  macOS:             brew install qemu libvirt && brew services start libvirt"
+    else
+      echo "  Debian/Ubuntu:     sudo apt install qemu-kvm libvirt-daemon-system virtinst"
+      echo "  Fedora/RHEL:       sudo dnf install qemu-kvm libvirt virt-install"
+      echo "  NixOS:             nix-env -iA nixpkgs.libvirt nixpkgs.virt-manager nixpkgs.qemu"
+    fi
+    echo ""
+    printf "  Install dependencies now? [Y/n] "
+    read -r INSTALL_DEPS </dev/tty
+    INSTALL_DEPS="${INSTALL_DEPS:-y}"
+  fi
+
+  case "$INSTALL_DEPS" in
+    [Yy]*)
+      info "Installing dependencies …"
+      if [ "$OS" = "Darwin" ]; then
+        install_deps_macos
+      else
+        install_deps_linux
+      fi
+      ok "Dependencies installed"
+      ;;
+    *)
+      echo "  Skipping dependency installation. Re-run after installing the required tools."
+      exit 1
+      ;;
+  esac
+fi
 
 ok "libvirt/virsh found"
 
