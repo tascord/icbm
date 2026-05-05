@@ -1,6 +1,8 @@
-use anyhow::Result;
-use clap::{Parser, Subcommand};
-use colored::Colorize;
+use {
+    anyhow::Result,
+    clap::{Parser, Subcommand},
+    colored::Colorize,
+};
 
 mod bench;
 mod metrics;
@@ -57,11 +59,7 @@ enum Commands {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    println!(
-        "\n{}  {}\n",
-        "🚀 ICBM".bold().cyan(),
-        "Integrated Container BenchMark".dimmed()
-    );
+    println!("\n{}  {}\n", "🚀 ICBM".bold().cyan(), "Integrated Container BenchMark".dimmed());
 
     match cli.command.unwrap_or(Commands::Run {
         flavours: "ubuntu,nixos".to_string(),
@@ -69,16 +67,8 @@ async fn main() -> Result<()> {
         json_out: None,
         skip_provision: false,
     }) {
-        Commands::Run {
-            flavours,
-            keep_vms,
-            json_out,
-            skip_provision,
-        } => {
-            let requested: Vec<vm::Flavour> = flavours
-                .split(',')
-                .map(|s| s.trim().parse())
-                .collect::<Result<_, _>>()?;
+        Commands::Run { flavours, keep_vms, json_out, skip_provision } => {
+            let requested: Vec<vm::Flavour> = flavours.split(',').map(|s| s.trim().parse()).collect::<Result<_, _>>()?;
 
             run_benchmark(requested, keep_vms, json_out, skip_provision).await?;
         }
@@ -101,11 +91,7 @@ async fn run_benchmark(
     let mut all_results = vec![];
 
     for flavour in &flavours {
-        println!(
-            "\n{} {}",
-            "▶  Benchmarking flavour:".bold(),
-            flavour.to_string().yellow().bold()
-        );
+        println!("\n{} {}", "▶  Benchmarking flavour:".bold(), flavour.to_string().yellow().bold());
 
         // ------------------------------------------------------------------
         // 1. Provision VM (unless caller asked to skip)
@@ -146,11 +132,7 @@ async fn run_benchmark(
     if let Some(path) = json_out {
         let json = serde_json::to_string_pretty(&all_results)?;
         std::fs::write(&path, json)?;
-        println!(
-            "\n{} {}",
-            "📄 JSON report written to".dimmed(),
-            path.display().to_string().underline()
-        );
+        println!("\n{} {}", "📄 JSON report written to".dimmed(), path.display().to_string().underline());
     }
 
     Ok(())

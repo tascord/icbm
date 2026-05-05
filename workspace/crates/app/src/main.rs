@@ -1,15 +1,15 @@
 //! Application entry-point that exercises all workspace crates.
 
-use std::{sync::Arc, time::Duration};
-
-use anyhow::Result;
-use rand::Rng;
-use tracing::{info, warn};
-
-use async_worker::{pipeline, Handler, Ticker};
-use compute::{histogram, parallel_sort, pearson, sieve, Matrix};
-use models::{Event, Metric, Status, Task, Tree};
-use utils::{mean, std_dev, to_camel_case, to_snake_case, Registry};
+use {
+    anyhow::Result,
+    async_worker::{pipeline, Handler, Ticker},
+    compute::{histogram, parallel_sort, pearson, sieve, Matrix},
+    models::{Event, Metric, Status, Task, Tree},
+    rand::Rng,
+    std::{sync::Arc, time::Duration},
+    tracing::{info, warn},
+    utils::{mean, std_dev, to_camel_case, to_snake_case, Registry},
+};
 
 // ---------------------------------------------------------------------------
 // Main
@@ -18,10 +18,7 @@ use utils::{mean, std_dev, to_camel_case, to_snake_case, Registry};
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("app=info".parse()?),
-        )
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive("app=info".parse()?))
         .init();
 
     info!("Starting workspace benchmark app");
@@ -65,9 +62,7 @@ async fn main() -> Result<()> {
     let mut reg: Registry<Task<u32>> = Registry::new();
     for i in 0..50u32 {
         let name = to_camel_case(&format!("task_{}", i));
-        let t = Task::new(name.clone(), i)
-            .with_tag("bench")
-            .with_meta("index", i.to_string());
+        let t = Task::new(name.clone(), i).with_tag("bench").with_meta("index", i.to_string());
         reg.insert(to_snake_case(&name), t);
     }
     info!("Registry has {} tasks", reg.len());
@@ -77,13 +72,8 @@ async fn main() -> Result<()> {
         .with_child(Tree::leaf(2).with_child(Tree::leaf(5)));
     info!("Tree depth={} size={}", tree.depth(), tree.size());
 
-    let event: Event<Vec<Metric>> = Event::new(
-        "bench.complete",
-        vec![
-            Metric::new("cpu_pct", 78.5, "%"),
-            Metric::new("mem_mib", 1024.0, "MiB"),
-        ],
-    );
+    let event: Event<Vec<Metric>> =
+        Event::new("bench.complete", vec![Metric::new("cpu_pct", 78.5, "%"), Metric::new("mem_mib", 1024.0, "MiB")]);
     info!("Event id={} kind={}", event.id, event.kind);
 
     // ------------------------------------------------------------------
@@ -96,9 +86,7 @@ async fn main() -> Result<()> {
             Ok(sieve(x as usize * 10).len() as u64)
         })
     });
-    let format_fn: Handler<u64, String> = Arc::new(|n: u64| {
-        Box::pin(async move { Ok(format!("{} primes", n)) })
-    });
+    let format_fn: Handler<u64, String> = Arc::new(|n: u64| Box::pin(async move { Ok(format!("{} primes", n)) }));
 
     let results = pipeline(8, 0u32..100, compute_fn, format_fn).await;
     let ok = results.iter().filter(|r| r.is_ok()).count();
@@ -108,21 +96,14 @@ async fn main() -> Result<()> {
     // 5. Ticker
     // ------------------------------------------------------------------
     use futures::StreamExt;
-    let ticks: Vec<usize> = Ticker::new(Duration::from_millis(1), 5)
-        .stream()
-        .collect()
-        .await;
+    let ticks: Vec<usize> = Ticker::new(Duration::from_millis(1), 5).stream().collect().await;
     info!("Ticker ticks: {:?}", ticks);
 
     // ------------------------------------------------------------------
     // 6. Aggregate stats over multiple runs
     // ------------------------------------------------------------------
     let run_times: Vec<f64> = (0..20).map(|i| 1.5 + i as f64 * 0.3).collect();
-    info!(
-        "Run stats: mean={:.2}s  std_dev={:.2}s",
-        mean(&run_times).unwrap_or(0.0),
-        std_dev(&run_times).unwrap_or(0.0),
-    );
+    info!("Run stats: mean={:.2}s  std_dev={:.2}s", mean(&run_times).unwrap_or(0.0), std_dev(&run_times).unwrap_or(0.0),);
 
     // ------------------------------------------------------------------
     // 7. Status machine demo
