@@ -1,0 +1,15 @@
+condense_wildcard_suffixes = true
+edition = "2024"
+fn_single_line = true
+format_strings = true
+group_imports = "StdExternalCrate"
+ignore = ["target"]
+imports_granularity = "One"
+max_width = 125
+normalize_comments = true
+normalize_doc_attributes = true
+overflow_delimited_expr = true
+reorder_impl_items = true
+skip_children = true
+unstable_features = true
+use_small_heuristics = "Max"
