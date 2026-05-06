@@ -87,19 +87,21 @@ jobs:
             LIBVIRT_DEFAULT_URI="qemu:///session"
             SUDO_CMD=""
             export ICBM_VIRT_NETWORK="user"
+            export ICBM_STATE_DIR="${RUNNER_TEMP}/icbm"
           else
             LIBVIRT_DEFAULT_URI="qemu:///system"
             SUDO_CMD="sudo --preserve-env=ICBM_STATE_DIR,LIBVIRT_DEFAULT_URI,ICBM_VIRT_NETWORK"
             export ICBM_VIRT_NETWORK="network=default"
+            export ICBM_STATE_DIR="/tmp/icbm"
           fi
           echo "Starting benchmark at $(date)" > benchmark-output-${{ matrix.asset_name }}.txt
           echo "Binary: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" >> benchmark-output-${{ matrix.asset_name }}.txt
           echo "Provider: ${BENCH_PROVIDER}" >> benchmark-output-${{ matrix.asset_name }}.txt
           echo "LIBVIRT_DEFAULT_URI: ${LIBVIRT_DEFAULT_URI}" >> benchmark-output-${{ matrix.asset_name }}.txt
-          echo "ICBM_STATE_DIR: ${RUNNER_TEMP}/icbm" >> benchmark-output-${{ matrix.asset_name }}.txt
+          echo "ICBM_STATE_DIR: ${ICBM_STATE_DIR}" >> benchmark-output-${{ matrix.asset_name }}.txt
           echo "ICBM_VIRT_NETWORK: ${ICBM_VIRT_NETWORK}" >> benchmark-output-${{ matrix.asset_name }}.txt
           echo "---" >> benchmark-output-${{ matrix.asset_name }}.txt
-          if ICBM_STATE_DIR="${RUNNER_TEMP}/icbm" LIBVIRT_DEFAULT_URI="${LIBVIRT_DEFAULT_URI}" ICBM_VIRT_NETWORK="${ICBM_VIRT_NETWORK}" $SUDO_CMD target/${{ matrix.target }}/release/${{ matrix.artifact_name }} run --provider "$BENCH_PROVIDER" >> benchmark-output-${{ matrix.asset_name }}.txt 2>&1; then
+          if ICBM_STATE_DIR="${ICBM_STATE_DIR}" LIBVIRT_DEFAULT_URI="${LIBVIRT_DEFAULT_URI}" ICBM_VIRT_NETWORK="${ICBM_VIRT_NETWORK}" $SUDO_CMD target/${{ matrix.target }}/release/${{ matrix.artifact_name }} run --provider "$BENCH_PROVIDER" >> benchmark-output-${{ matrix.asset_name }}.txt 2>&1; then
             echo "---" >> benchmark-output-${{ matrix.asset_name }}.txt
             echo "Benchmark completed successfully at $(date)" >> benchmark-output-${{ matrix.asset_name }}.txt
           else

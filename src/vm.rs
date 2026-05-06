@@ -112,14 +112,23 @@ struct ImageInfo {
 }
 
 fn image_info(flavour: &Flavour) -> ImageInfo {
+    let arch = std::env::consts::ARCH;
     match flavour {
         Flavour::Ubuntu => ImageInfo {
-            url: "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img",
+            url: if arch == "aarch64" {
+                "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img"
+            } else {
+                "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
+            },
             sha256: "", // checksums change; verify manually in prod
             user: "ubuntu",
         },
         Flavour::NixOs => ImageInfo {
-            url: "https://channels.nixos.org/nixos-24.05/latest-nixos-minimal-x86_64-linux.iso",
+            url: if arch == "aarch64" {
+                "https://channels.nixos.org/nixos-24.05/latest-nixos-minimal-aarch64-linux.iso"
+            } else {
+                "https://channels.nixos.org/nixos-24.05/latest-nixos-minimal-x86_64-linux.iso"
+            },
             sha256: "",
             user: "root",
         },
