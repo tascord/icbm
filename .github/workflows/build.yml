@@ -91,6 +91,21 @@ jobs:
           
           # Initialize step summary for this runner
           echo "### Benchmark: ${{ matrix.asset_name }}" >> $GITHUB_STEP_SUMMARY
+
+          echo "#### Host Machine Specs" >> $GITHUB_STEP_SUMMARY
+          if [ "$RUNNER_OS" == "macOS" ]; then
+            CPU=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "Apple Silicon")
+            CORES=$(sysctl -n hw.ncpu 2>/dev/null || echo "?")
+            RAM=$(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1073741824 ))GB
+          else
+            CPU=$(grep -m 1 'model name' /proc/cpuinfo | cut -d ':' -f 2 | xargs || echo "Unknown CPU")
+            CORES=$(nproc 2>/dev/null || echo "?")
+            RAM=$(free -h 2>/dev/null | awk '/^Mem:/ {print $2}' || echo "?")
+          fi
+          echo "- **CPU**: $CPU ($CORES cores)" >> $GITHUB_STEP_SUMMARY
+          echo "- **RAM**: $RAM" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
           echo "| OS | Target | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|---|" >> $GITHUB_STEP_SUMMARY
           
