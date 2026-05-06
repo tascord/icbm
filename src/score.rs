@@ -129,17 +129,11 @@ pub fn evaluate(flavour: Flavour, bench: BenchResult) -> ScoredResult {
         });
     }
 
-    // Total = average of per-step scores (successful steps only).
-    let valid: Vec<u32> = step_scores
-        .iter()
-        .filter(|s| s.score > 0)
-        .map(|s| s.score)
-        .collect();
-
-    let total_score = if valid.is_empty() {
+    // Total = average of per-step scores (including failed steps which score 0).
+    let total_score = if step_scores.is_empty() {
         0
     } else {
-        (valid.iter().sum::<u32>() as f64 / valid.len() as f64).round() as u32
+        (step_scores.iter().map(|s| s.score).sum::<u32>() as f64 / step_scores.len() as f64).round() as u32
     };
 
     let rating = rating_label(total_score);

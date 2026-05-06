@@ -14,16 +14,27 @@ pub fn print_summary(result: &ScoredResult) {
         result.flavour.to_string().yellow().bold()
     );
 
-    for s in &result.step_scores {
+    for (s, step_result) in result.step_scores.iter().zip(result.bench.steps.iter()) {
         let bar = score_bar(s.score);
-        println!(
-            "  │  {:30}  score={:4}  [{bar}]  time={:4}  cpu={:4}  mem={:4}",
-            s.name,
-            s.score,
-            s.time_score,
-            s.cpu_score,
-            s.mem_score,
-        );
+        let m = &step_result.metrics;
+        
+        if step_result.succeeded() {
+            println!(
+                "  │  {:30}  score={:4}  [{bar}]  time={:4.1}s  cpu={:3.0}%  mem={:4}M",
+                s.name,
+                s.score,
+                m.elapsed_secs,
+                m.avg_cpu_pct,
+                m.peak_memory_mib,
+            );
+        } else {
+            println!(
+                "  │  {:30}  score={:4}  [{bar}]  {}                       ",
+                s.name,
+                s.score,
+                "FAILED".red().bold(),
+            );
+        }
     }
 
     println!("  ├─────────────────────────────────────────────────");
