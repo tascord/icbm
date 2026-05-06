@@ -33,7 +33,7 @@ enum Commands {
     /// Run the full benchmark suite (default when no subcommand is given).
     Run {
         /// VM flavour(s) to benchmark.  Comma-separated list: ubuntu,nixos
-        #[arg(long, default_value = "ubuntu,nixos")]
+        #[arg(long, default_value = "ubuntu")]
         flavours: String,
 
         /// VM provider: auto, libvirt, utm
@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
     println!("\n{}  {}\n", "🚀 ICBM".bold().cyan(), "Integrated Container BenchMark".dimmed());
 
     match cli.command.unwrap_or(Commands::Run {
-        flavours: "ubuntu,nixos".to_string(),
+        flavours: "ubuntu".to_string(),
         provider: "auto".to_string(),
         keep_vms: false,
         json_out: None,
