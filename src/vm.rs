@@ -236,6 +236,8 @@ impl Domain {
 
         // 4. virt-install
         let network_arg = std::env::var("ICBM_VIRT_NETWORK").unwrap_or_else(|_| "network=default".to_string());
+        let disk_arg = format!("path={},format=qcow2", self.disk.display());
+        let cdrom_arg = format!("path={},device=cdrom", seed.display());
         let args = vec![
             "--name",
             &self.name,
@@ -246,9 +248,9 @@ impl Domain {
             "--os-variant",
             self.os_variant(),
             "--disk",
-            &format!("path={},format=qcow2", self.disk.display()),
+            &disk_arg,
             "--disk",
-            &format!("path={},device=cdrom", seed.display()),
+            &cdrom_arg,
             "--import",
             "--network",
             &network_arg,
