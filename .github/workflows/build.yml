@@ -56,7 +56,7 @@ jobs:
             sudo virsh --connect qemu:///system net-autostart default || true
             sudo virsh --connect qemu:///system net-start default || true
           elif [ "$RUNNER_OS" == "macOS" ]; then
-            brew install openssl pkg-config qemu libvirt
+            brew install openssl pkg-config qemu libvirt virt-manager
             brew services start libvirt || true
           fi
         shell: bash
@@ -79,18 +79,27 @@ jobs:
           path: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
 
       - name: Run benchmark
-        if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu'
+        if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'aarch64-apple-darwin'
         continue-on-error: true
         run: |
           BENCH_PROVIDER="libvirt"
-          LIBVIRT_DEFAULT_URI="qemu:///system"
+          if [ "$RUNNER_OS" == "macOS" ]; then
+            LIBVIRT_DEFAULT_URI="qemu:///session"
+            SUDO_CMD=""
+            export ICBM_VIRT_NETWORK="user"
+          else
+            LIBVIRT_DEFAULT_URI="qemu:///system"
+            SUDO_CMD="sudo --preserve-env=ICBM_STATE_DIR,LIBVIRT_DEFAULT_URI,ICBM_VIRT_NETWORK"
+            export ICBM_VIRT_NETWORK="network=default"
+          fi
           echo "Starting benchmark at $(date)" > benchmark-output-${{ matrix.asset_name }}.txt
           echo "Binary: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" >> benchmark-output-${{ matrix.asset_name }}.txt
           echo "Provider: ${BENCH_PROVIDER}" >> benchmark-output-${{ matrix.asset_name }}.txt
           echo "LIBVIRT_DEFAULT_URI: ${LIBVIRT_DEFAULT_URI}" >> benchmark-output-${{ matrix.asset_name }}.txt
           echo "ICBM_STATE_DIR: ${RUNNER_TEMP}/icbm" >> benchmark-output-${{ matrix.asset_name }}.txt
+          echo "ICBM_VIRT_NETWORK: ${ICBM_VIRT_NETWORK}" >> benchmark-output-${{ matrix.asset_name }}.txt
           echo "---" >> benchmark-output-${{ matrix.asset_name }}.txt
-          if ICBM_STATE_DIR="${RUNNER_TEMP}/icbm" LIBVIRT_DEFAULT_URI="${LIBVIRT_DEFAULT_URI}" sudo --preserve-env=ICBM_STATE_DIR,LIBVIRT_DEFAULT_URI target/${{ matrix.target }}/release/${{ matrix.artifact_name }} run --provider "$BENCH_PROVIDER" >> benchmark-output-${{ matrix.asset_name }}.txt 2>&1; then
+          if ICBM_STATE_DIR="${RUNNER_TEMP}/icbm" LIBVIRT_DEFAULT_URI="${LIBVIRT_DEFAULT_URI}" ICBM_VIRT_NETWORK="${ICBM_VIRT_NETWORK}" $SUDO_CMD target/${{ matrix.target }}/release/${{ matrix.artifact_name }} run --provider "$BENCH_PROVIDER" >> benchmark-output-${{ matrix.asset_name }}.txt 2>&1; then
             echo "---" >> benchmark-output-${{ matrix.asset_name }}.txt
             echo "Benchmark completed successfully at $(date)" >> benchmark-output-${{ matrix.asset_name }}.txt
           else
@@ -101,13 +110,13 @@ jobs:
         shell: bash
 
       - name: Mark benchmark as skipped on unsupported runners
-        if: matrix.target == 'aarch64-apple-darwin' || matrix.target == 'x86_64-pc-windows-msvc'
+        if: matrix.target == 'x86_64-pc-windows-msvc'
         run: |
           echo "Starting benchmark at $(date)" > benchmark-output-${{ matrix.asset_name }}.txt
           echo "Binary: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" >> benchmark-output-${{ matrix.asset_name }}.txt
           echo "---" >> benchmark-output-${{ matrix.asset_name }}.txt
           echo "Benchmark skipped in CI for this target." >> benchmark-output-${{ matrix.asset_name }}.txt
-          echo "Reason: provider tooling unavailable on GitHub-hosted runner (utmctl on macOS, virsh/libvirt on Windows)." >> benchmark-output-${{ matrix.asset_name }}.txt
+          echo "Reason: provider tooling unavailable on GitHub-hosted runner (virsh/libvirt on Windows)." >> benchmark-output-${{ matrix.asset_name }}.txt
           echo "Run on a self-hosted machine with provider tools installed to benchmark this target." >> benchmark-output-${{ matrix.asset_name }}.txt
         shell: bash
 

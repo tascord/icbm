@@ -199,8 +199,11 @@ impl Domain {
         println!("  {} VM '{}'", "Provisioning".bold(), self.name.cyan());
 
         // Prerequisites
-        for tool in &["virsh", "virt-install", "qemu-img", "cloud-localds"] {
+        for tool in &["virsh", "virt-install", "qemu-img"] {
             check_tool(tool)?;
+        }
+        if check_tool("cloud-localds").is_err() && check_tool("mkisofs").is_err() && check_tool("hdiutil").is_err() {
+            bail!("Required tool 'cloud-localds', 'mkisofs', or 'hdiutil' not found in PATH");
         }
 
         std::fs::create_dir_all(images_dir())?;
@@ -232,29 +235,28 @@ impl Domain {
         let seed = self.create_cloud_init_seed(info.user).await?;
 
         // 4. virt-install
-        run_cmd(
-            "virt-install",
-            &[
-                "--name",
-                &self.name,
-                "--ram",
-                "4096",
-                "--vcpus",
-                "2",
-                "--os-variant",
-                self.os_variant(),
-                "--disk",
-                &format!("path={},format=qcow2", self.disk.display()),
-                "--disk",
-                &format!("path={},device=cdrom", seed.display()),
-                "--import",
-                "--network",
-                "network=default",
-                "--noautoconsole",
-                "--graphics",
-                "none",
-            ],
-        )?;
+        let network_arg = std::env::var("ICBM_VIRT_NETWORK").unwrap_or_else(|_| "network=default".to_string());
+        let args = vec![
+            "--name",
+            &self.name,
+            "--ram",
+            "4096",
+            "--vcpus",
+            "2",
+            "--os-variant",
+            self.os_variant(),
+            "--disk",
+            &format!("path={},format=qcow2", self.disk.display()),
+            "--disk",
+            &format!("path={},device=cdrom", seed.display()),
+            "--import",
+            "--network",
+            &network_arg,
+            "--noautoconsole",
+            "--graphics",
+            "none",
+        ];
+        run_cmd("virt-install", &args)?;
 
         println!("  {} domain '{}' started", "✓".green(), self.name.cyan());
         Ok(())
@@ -343,14 +345,46 @@ impl Domain {
         )?;
 
         let seed_iso = vms_dir().join(format!("{}-seed.iso", self.name));
-        run_cmd(
-            "cloud-localds",
-            &[
-                seed_iso.to_str().unwrap(),
-                seed_dir.join("user-data").to_str().unwrap(),
-                seed_dir.join("meta-data").to_str().unwrap(),
-            ],
-        )?;
+        
+        if check_tool("cloud-localds").is_ok() {
+            run_cmd(
+                "cloud-localds",
+                &[
+                    seed_iso.to_str().unwrap(),
+                    seed_dir.join("user-data").to_str().unwrap(),
+                    seed_dir.join("meta-data").to_str().unwrap(),
+                ],
+            )?;
+        } else if check_tool("mkisofs").is_ok() {
+            run_cmd(
+                "mkisofs",
+                &[
+                    "-output",
+                    seed_iso.to_str().unwrap(),
+                    "-volid",
+                    "cidata",
+                    "-joliet",
+                    "-rock",
+                    seed_dir.join("user-data").to_str().unwrap(),
+                    seed_dir.join("meta-data").to_str().unwrap(),
+                ],
+            )?;
+        } else {
+            run_cmd(
+                "hdiutil",
+                &[
+                    "makehybrid",
+                    "-o",
+                    seed_iso.to_str().unwrap(),
+                    "-hfs",
+                    "-joliet",
+                    "-iso",
+                    "-default-volume-name",
+                    "cidata",
+                    seed_dir.to_str().unwrap(),
+                ],
+            )?;
+        }
 
         Ok(seed_iso)
     }
