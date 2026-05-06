@@ -254,29 +254,43 @@ impl Domain {
         let disk_arg = format!("path={},format=qcow2", self.disk.display());
         let cdrom_arg = format!("path={},device=cdrom", seed.display());
         let arch = std::env::consts::ARCH;
-        let args = vec![
-            "--name",
-            &self.name,
-            "--arch",
-            arch,
-            "--ram",
-            "4096",
-            "--vcpus",
-            "2",
-            "--os-variant",
-            self.os_variant(),
-            "--disk",
-            &disk_arg,
-            "--disk",
-            &cdrom_arg,
-            "--import",
-            "--network",
-            &network_arg,
-            "--noautoconsole",
-            "--graphics",
-            "none",
+        let mut args = vec![
+            "--name".to_string(),
+            self.name.clone(),
+            "--arch".to_string(),
+            arch.to_string(),
         ];
-        run_cmd("virt-install", &args)?;
+        
+        if cfg!(target_os = "macos") && arch == "aarch64" {
+            // Homebrew libvirt on Apple Silicon often requires explicit machine
+            // types or doesn't map kvm/hvf by default correctly in virt-install
+            args.push("--virt-type".to_string());
+            args.push("qemu".to_string()); // Fall back to qemu TCG or hvf if unconfigured
+            args.push("--machine".to_string());
+            args.push("virt".to_string());
+        }
+
+        args.extend(vec![
+            "--ram".to_string(),
+            "4096".to_string(),
+            "--vcpus".to_string(),
+            "2".to_string(),
+            "--os-variant".to_string(),
+            self.os_variant().to_string(),
+            "--disk".to_string(),
+            disk_arg,
+            "--disk".to_string(),
+            cdrom_arg,
+            "--import".to_string(),
+            "--network".to_string(),
+            network_arg,
+            "--noautoconsole".to_string(),
+            "--graphics".to_string(),
+            "none".to_string(),
+        ]);
+
+        let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        run_cmd("virt-install", &args_ref)?;
 
         println!("  {} domain '{}' started", "✓".green(), self.name.cyan());
         Ok(())
@@ -293,7 +307,7 @@ impl Domain {
     fn os_variant(&self) -> &'static str {
         match self.flavour {
             Flavour::Ubuntu => "ubuntu24.04",
-            Flavour::NixOs => "nixos",
+            Flavour::NixOs => "nixos-unknown",
         }
     }
 
