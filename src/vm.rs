@@ -225,6 +225,12 @@ impl Domain {
 
         // 2. Create overlay disk (thin clone)
         let overlay = self.disk.clone();
+        let backing_fmt = if base.extension().and_then(|s| s.to_str()) == Some("iso") {
+            "raw"
+        } else {
+            "qcow2"
+        };
+
         run_cmd(
             "qemu-img",
             &[
@@ -234,7 +240,7 @@ impl Domain {
                 "-b",
                 base.to_str().unwrap(),
                 "-F",
-                "qcow2",
+                backing_fmt,
                 overlay.to_str().unwrap(),
                 "20G",
             ],
@@ -345,7 +351,10 @@ impl Domain {
              packages:\n  \
              - openssh-server\n  \
              - curl\n  \
-             - git\n\
+             - git\n  \
+             - build-essential\n  \
+             - pkg-config\n  \
+             - libssl-dev\n\
              runcmd:\n  \
              - systemctl enable --now ssh\n"
         );

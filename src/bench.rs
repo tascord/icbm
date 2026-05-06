@@ -214,6 +214,17 @@ async fn run_step(sess: &Session, name: StepName, cmd: &str) -> Result<StepResul
         metrics.peak_memory_mib,
     );
 
+    if exit_code != 0 {
+        let tail_str = output_tail.trim();
+        if !tail_str.is_empty() {
+            println!("      {}", "--- Command Output ---".dimmed());
+            for line in tail_str.lines() {
+                println!("      {}", line.dimmed());
+            }
+            println!("      {}", "----------------------".dimmed());
+        }
+    }
+
     Ok(StepResult {
         name,
         metrics,
