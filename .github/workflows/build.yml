@@ -28,10 +28,6 @@ jobs:
             target: aarch64-apple-darwin
             artifact_name: icbm
             asset_name: icbm-macos-aarch64
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact_name: icbm.exe
-            asset_name: icbm-windows-x86_64.exe
 
     steps:
       - name: Checkout code
@@ -45,7 +41,6 @@ jobs:
           override: true
 
       - name: Install dependencies
-        if: matrix.os != 'windows-latest'
         run: |
           if [ "$RUNNER_OS" == "Linux" ]; then
             sudo apt-get update
@@ -68,7 +63,6 @@ jobs:
           args: --release --target ${{ matrix.target }}
 
       - name: Strip binary (Unix)
-        if: matrix.os != 'windows-latest'
         run: |
           strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
 
@@ -79,7 +73,7 @@ jobs:
           path: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
 
       - name: Run benchmark
-        if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'aarch64-apple-darwin'
+        if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-apple-darwin'
         continue-on-error: true
         run: |
           BENCH_PROVIDER="libvirt"
@@ -94,40 +88,20 @@ jobs:
             export ICBM_VIRT_NETWORK="network=default"
             export ICBM_STATE_DIR="/tmp/icbm"
           fi
-          echo "Starting benchmark at $(date)" > benchmark-output-${{ matrix.asset_name }}.txt
-          echo "Binary: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" >> benchmark-output-${{ matrix.asset_name }}.txt
-          echo "Provider: ${BENCH_PROVIDER}" >> benchmark-output-${{ matrix.asset_name }}.txt
-          echo "LIBVIRT_DEFAULT_URI: ${LIBVIRT_DEFAULT_URI}" >> benchmark-output-${{ matrix.asset_name }}.txt
-          echo "ICBM_STATE_DIR: ${ICBM_STATE_DIR}" >> benchmark-output-${{ matrix.asset_name }}.txt
-          echo "ICBM_VIRT_NETWORK: ${ICBM_VIRT_NETWORK}" >> benchmark-output-${{ matrix.asset_name }}.txt
-          echo "---" >> benchmark-output-${{ matrix.asset_name }}.txt
-          if ICBM_STATE_DIR="${ICBM_STATE_DIR}" LIBVIRT_DEFAULT_URI="${LIBVIRT_DEFAULT_URI}" ICBM_VIRT_NETWORK="${ICBM_VIRT_NETWORK}" $SUDO_CMD target/${{ matrix.target }}/release/${{ matrix.artifact_name }} run --provider "$BENCH_PROVIDER" >> benchmark-output-${{ matrix.asset_name }}.txt 2>&1; then
-            echo "---" >> benchmark-output-${{ matrix.asset_name }}.txt
-            echo "Benchmark completed successfully at $(date)" >> benchmark-output-${{ matrix.asset_name }}.txt
+          
+          # Initialize step summary for this runner
+          echo "### Benchmark: ${{ matrix.asset_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "| OS | Target | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|---|" >> $GITHUB_STEP_SUMMARY
+          
+          if ICBM_STATE_DIR="${ICBM_STATE_DIR}" LIBVIRT_DEFAULT_URI="${LIBVIRT_DEFAULT_URI}" ICBM_VIRT_NETWORK="${ICBM_VIRT_NETWORK}" $SUDO_CMD target/${{ matrix.target }}/release/${{ matrix.artifact_name }} run --provider "$BENCH_PROVIDER" 2>&1; then
+            echo "| ${{ matrix.os }} | ${{ matrix.target }} | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
           else
             EXIT_CODE=$?
-            echo "---" >> benchmark-output-${{ matrix.asset_name }}.txt
-            echo "Benchmark failed with exit code: $EXIT_CODE at $(date)" >> benchmark-output-${{ matrix.asset_name }}.txt
+            echo "| ${{ matrix.os }} | ${{ matrix.target }} | ❌ Failed (Code: $EXIT_CODE) |" >> $GITHUB_STEP_SUMMARY
           fi
         shell: bash
 
-      - name: Mark benchmark as skipped on unsupported runners
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        run: |
-          echo "Starting benchmark at $(date)" > benchmark-output-${{ matrix.asset_name }}.txt
-          echo "Binary: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" >> benchmark-output-${{ matrix.asset_name }}.txt
-          echo "---" >> benchmark-output-${{ matrix.asset_name }}.txt
-          echo "Benchmark skipped in CI for this target." >> benchmark-output-${{ matrix.asset_name }}.txt
-          echo "Reason: provider tooling unavailable on GitHub-hosted runner (virsh/libvirt on Windows)." >> benchmark-output-${{ matrix.asset_name }}.txt
-          echo "Run on a self-hosted machine with provider tools installed to benchmark this target." >> benchmark-output-${{ matrix.asset_name }}.txt
-        shell: bash
-
-      - name: Upload benchmark output
-        if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'aarch64-apple-darwin' || matrix.target == 'x86_64-pc-windows-msvc'
-        uses: actions/upload-artifact@v4
-        with:
-          name: benchmark-output-${{ matrix.asset_name }}
-          path: benchmark-output-${{ matrix.asset_name }}.txt
 
   release:
     name: Create Release
@@ -154,10 +128,6 @@ jobs:
           cd artifacts
           for d in */; do
             d=${d%/}
-            # skip benchmark output dirs
-            if [[ "$d" == benchmark-output-* ]]; then
-              continue
-            fi
             if [ -f "$d/icbm.exe" ]; then
               mv "$d/icbm.exe" "${d}.tmp"
               rm -rf "$d"
@@ -176,7 +146,7 @@ jobs:
           name: "Build ${{ github.sha }}"
           files: |
             artifacts/icbm-*
-            artifacts/benchmark-output-*/*.txt
+            
           draft: false
           prerelease: true
           generate_release_notes: true
