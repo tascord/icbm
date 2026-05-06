@@ -139,17 +139,26 @@ jobs:
             fi
           done
 
+      - name: Generate Release Body
+        shell: bash
+        run: |
+          echo "Automated build of commit ${{ github.sha }}" > release_body.txt
+          echo "" >> release_body.txt
+          echo "\`\`\`" >> release_body.txt
+          git log -1 --pretty=%B >> release_body.txt
+          echo "\`\`\`" >> release_body.txt
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: main-${{ github.sha }}
           name: "Build ${{ github.sha }}"
+          body_path: release_body.txt
           files: |
             artifacts/icbm-*
             
           draft: false
           prerelease: true
-          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

@@ -247,9 +247,12 @@ impl Domain {
         let network_arg = std::env::var("ICBM_VIRT_NETWORK").unwrap_or_else(|_| "network=default".to_string());
         let disk_arg = format!("path={},format=qcow2", self.disk.display());
         let cdrom_arg = format!("path={},device=cdrom", seed.display());
+        let arch = std::env::consts::ARCH;
         let args = vec![
             "--name",
             &self.name,
+            "--arch",
+            arch,
             "--ram",
             "4096",
             "--vcpus",
