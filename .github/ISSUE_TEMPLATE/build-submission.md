@@ -14,5 +14,8 @@ assignees: tascord
 | Memory     | 64gb                                     |
 | CPU        | Apple M4 Pro                             |
 
+## Score
+Codeblock of the table or the raw numbers
+
 ## Additional Notes
 Anything that might be of note about the running or whatnot.
