@@ -1,6 +1,8 @@
 # ICBM – Integrated Container BenchMark
 
-this is like a hyper specific tool for benchmarking 86x rust performance inside vms on different machines.
+this is a hyper specific tool for benchmarking 86x rust performance inside vms on different machines. its probably not super useful if you aren't me or someone in my team
+
+#### + [submit](https://github.com/tascord/icbm/issues/new?template=build-submission.md) new scores
 
 ### run
 ```bash
@@ -35,14 +37,13 @@ Options (run):
 ```
 
 ### benchmark
-Benchmark steps
-| #   | Step                  | What it measures                          |
-| --- | --------------------- | ----------------------------------------- |
-| 1   | Install Rust          | rustup download + toolchain install speed |
-| 2   | Clone workspace       | git sparse-checkout speed                 |
-| 3   | cargo clippy --fix    | incremental analysis speed                |
-| 4   | cargo build (dev)     | debug build throughput                    |
-| 5   | cargo build --release | optimised build throughput                |
+| #   | Step                    | What it measures                          |
+| --- | ----------------------- | ----------------------------------------- |
+| 1   | Install Rust            | rustup download + toolchain install speed |
+| 2   | Clone workspace         | git sparse-checkout speed                 |
+| 3   | `cargo clippy --fix`    | incremental analysis speed                |
+| 4   | `cargo build` (dev)     | debug build throughput                    |
+| 5   | `cargo build --release` | optimised build throughput                |
 
 Each step is wrapped in a sampler that records:
   - Wall-clock elapsed time

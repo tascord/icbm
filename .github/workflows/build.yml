@@ -52,7 +52,8 @@ jobs:
             sudo virsh --connect qemu:///system net-start default || true
           elif [ "$RUNNER_OS" == "macOS" ]; then
             brew install openssl pkg-config qemu libvirt virt-manager
-            brew services start libvirt || true
+            nohup libvirtd &
+            sleep 3
           fi
         shell: bash
 
