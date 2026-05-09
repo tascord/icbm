@@ -265,7 +265,7 @@ impl Domain {
             // Homebrew libvirt on Apple Silicon often requires explicit machine
             // types or doesn't map kvm/hvf by default correctly in virt-install
             args.push("--virt-type".to_string());
-            args.push("qemu".to_string()); // Fall back to qemu TCG or hvf if unconfigured
+            args.push("hvf".to_string()); // Use hypervisor framework (hvf) on Apple Silicon
             args.push("--machine".to_string());
             args.push("virt".to_string());
         }
