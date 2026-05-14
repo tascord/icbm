@@ -10,11 +10,9 @@
 #   --install-deps   Automatically install missing system dependencies without prompting.
 #
 # The script will:
-#   1. Check for / install Rust via rustup.
-#   2. Optionally install system dependencies (libvirt/qemu on Linux, homebrew packages on macOS).
-#   3. Sparse-clone only the tool source from this repository.
-#   4. Build icbm in release mode.
-#   5. Run the benchmark.
+#   1. Optionally install system dependencies (libvirt/qemu on Linux, homebrew packages on macOS).
+#   2. Download the latest icbm binary from GitHub releases.
+#   3. Run the benchmark.
 
 set -eu
 
@@ -31,6 +29,7 @@ done
 
 REPO="https://github.com/tascord/icbm"
 CLONE_DIR="${ICBM_DIR:-$HOME/.local/share/icbm}"
+BIN_DIR="$CLONE_DIR/bin"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -48,21 +47,75 @@ ok()    { printf '\033[1;32m ✓  \033[0m%s\n' "$*"; }
 err()   { printf '\033[1;31m ✗  \033[0m%s\n' "$*" >&2; exit 1; }
 
 # ---------------------------------------------------------------------------
-# 1. Ensure Rust is available
+# Detect platform and binary download functions
 # ---------------------------------------------------------------------------
 
-if ! command -v cargo >/dev/null 2>&1; then
-  info "Installing Rust via rustup …"
-  curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable
-  # shellcheck disable=SC1091
-  . "$HOME/.cargo/env"
-  ok "Rust installed"
-else
-  ok "Rust already installed: $(rustc --version)"
-fi
+detect_os_arch() {
+  OS="$(uname -s)"
+  ARCH="$(uname -m)"
 
-# shellcheck disable=SC1091
-. "$HOME/.cargo/env" 2>/dev/null || true
+  case "$OS" in
+    Linux)
+      OS_NAME="linux"
+      ;;
+    Darwin)
+      OS_NAME="darwin"
+      ;;
+    *)
+      err "Unsupported OS: $OS"
+      ;;
+  esac
+
+  case "$ARCH" in
+    x86_64)
+      ARCH_NAME="x86_64"
+      ;;
+    aarch64|arm64)
+      ARCH_NAME="aarch64"
+      ;;
+    *)
+      err "Unsupported architecture: $ARCH"
+      ;;
+  esac
+}
+
+download_binary() {
+  detect_os_arch
+  
+  info "Detecting latest release …"
+  
+  # Get the latest release info
+  RELEASE_JSON=$(curl -sSf "$REPO/releases/latest" 2>/dev/null | head -c 1000000)
+  
+  # Extract download URL for the current platform
+  ASSET_NAME="icbm-$OS_NAME-$ARCH_NAME"
+  DOWNLOAD_URL=$(echo "$RELEASE_JSON" | grep -o "\"browser_download_url\":\"[^\"]*$ASSET_NAME[^\"]*\"" | head -1 | cut -d'"' -f4)
+  
+  if [ -z "$DOWNLOAD_URL" ]; then
+    err "Could not find a release binary for $OS_NAME-$ARCH_NAME. Check available releases at $REPO/releases"
+  fi
+  
+  mkdir -p "$BIN_DIR"
+  ICBM_BIN="$BIN_DIR/icbm"
+  
+  if [ -f "$ICBM_BIN" ]; then
+    # Check if we already have the latest version
+    info "Downloading latest icbm binary …"
+  else
+    info "Downloading icbm binary …"
+  fi
+  
+  curl -sSfL "$DOWNLOAD_URL" -o "$ICBM_BIN"
+  chmod +x "$ICBM_BIN"
+  
+  ok "Binary ready at $ICBM_BIN"
+}
+
+# ---------------------------------------------------------------------------
+# 1. Download the latest binary
+# ---------------------------------------------------------------------------
+
+download_binary
 
 # ---------------------------------------------------------------------------
 # 2. Check / install libvirt + qemu deps
@@ -136,34 +189,7 @@ fi
 ok "libvirt/virsh found"
 
 # ---------------------------------------------------------------------------
-# 3. Sparse-clone the repo (tool source only — skip workspace/ and .github/)
-# ---------------------------------------------------------------------------
-
-if [ -d "$CLONE_DIR/.git" ]; then
-  info "Updating existing clone …"
-  git -C "$CLONE_DIR" fetch --depth=1 origin main
-  git -C "$CLONE_DIR" checkout FETCH_HEAD
-else
-  info "Sparse-cloning icbm …"
-  mkdir -p "$CLONE_DIR"
-  git clone --filter=blob:none --sparse --depth=1 "$REPO" "$CLONE_DIR"
-  git -C "$CLONE_DIR" sparse-checkout set src Cargo.toml Cargo.lock
-fi
-
-ok "Source ready in $CLONE_DIR"
-
-# ---------------------------------------------------------------------------
-# 4. Build icbm (release)
-# ---------------------------------------------------------------------------
-
-info "Building icbm (release) …"
-cargo build --release --manifest-path "$CLONE_DIR/Cargo.toml"
-ok "Build complete"
-
-ICBM_BIN="$CLONE_DIR/target/release/icbm"
-
-# ---------------------------------------------------------------------------
-# 5. Run the benchmark
+# 3. Run the benchmark
 # ---------------------------------------------------------------------------
 
 info "Launching benchmark …"
