@@ -374,9 +374,19 @@ impl Domain {
         cmd.arg("-e").arg(format!("set baseImage to POSIX file \"{}\"", base_path));
         cmd.arg("-e").arg(format!("set seedImage to POSIX file \"{}\"", seed_path));
         cmd.arg("-e").arg(format!(
-            "make new virtual machine with properties {{backend:qemu, configuration:{{name:\"{}\", architecture:\"{}\", memory:4096, cpu cores:2, hypervisor:true, drives:{{{{source:baseImage}}, {{removable:true, source:seedImage}}}}, network interfaces:{{{{mode:emulated, port forwards:{{{{protocol:TCP, host port:{}, guest port:22}}}}}}}}}}}}",
-            vm_name, arch, ssh_port
+            "set vm to make new virtual machine with properties {{backend:qemu, configuration:{{name:\"{}\", architecture:\"{}\"}}}}",
+            vm_name, arch
         ));
+        cmd.arg("-e").arg("set config to configuration of vm");
+        cmd.arg("-e").arg("set memory of config to 4096");
+        cmd.arg("-e").arg("set cpu cores of config to 2");
+        cmd.arg("-e").arg("set hypervisor of config to true");
+        cmd.arg("-e").arg("set drives of config to {{source:baseImage}, {removable:true, source:seedImage}} ");
+        cmd.arg("-e").arg(format!(
+            "set network interfaces of config to {{{{mode:emulated, port forwards:{{{{protocol:TCP, host port:{}, guest port:22}}}}}}}}",
+            ssh_port
+        ));
+        cmd.arg("-e").arg("update configuration of vm with config");
         cmd.arg("-e").arg("end tell");
 
         let output = cmd.output().context("Failed to launch 'osascript'")?;
@@ -467,6 +477,9 @@ impl Domain {
         )?;
 
         let seed_iso = vms_dir().join(format!("{}-seed.iso", self.name));
+        if seed_iso.exists() {
+            std::fs::remove_file(&seed_iso)?;
+        }
         
         if check_tool("cloud-localds").is_ok() {
             run_cmd(
