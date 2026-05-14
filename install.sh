@@ -10,7 +10,7 @@
 #   --install-deps   Automatically install missing system dependencies without prompting.
 #
 # The script will:
-#   1. Optionally install system dependencies (libvirt/qemu on Linux, homebrew packages on macOS).
+#   1. Optionally install system dependencies (libvirt/qemu on Linux, UTM on macOS).
 #   2. Download the latest icbm binary from GitHub releases.
 #   3. Run the benchmark.
 
@@ -30,6 +30,7 @@ done
 REPO="https://github.com/tascord/icbm"
 CLONE_DIR="${ICBM_DIR:-$HOME/.local/share/icbm}"
 BIN_DIR="$CLONE_DIR/bin"
+RUN_PROVIDER="auto"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -118,17 +119,25 @@ download_binary() {
 download_binary
 
 # ---------------------------------------------------------------------------
-# 2. Check / install libvirt + qemu deps
+# 2. Check / install VM provider deps
 # ---------------------------------------------------------------------------
 
+OS="$(uname -s)"
 DEPS_MISSING=0
-for tool in virsh virt-install qemu-img; do
-  command -v "$tool" >/dev/null 2>&1 || { DEPS_MISSING=1; break; }
-done
+
+if [ "$OS" = "Darwin" ]; then
+  RUN_PROVIDER="utm"
+  if ! command -v utmctl >/dev/null 2>&1; then
+    DEPS_MISSING=1
+  fi
+else
+  RUN_PROVIDER="libvirt"
+  for tool in virsh virt-install qemu-img; do
+    command -v "$tool" >/dev/null 2>&1 || { DEPS_MISSING=1; break; }
+  done
+fi
 
 if [ "$DEPS_MISSING" -eq 1 ]; then
-  OS="$(uname -s)"
-
   install_deps_linux() {
     if command -v apt-get >/dev/null 2>&1; then
       sudo apt-get update
@@ -147,18 +156,26 @@ if [ "$DEPS_MISSING" -eq 1 ]; then
       info "Homebrew not found – installing …"
       /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
     fi
-    brew install qemu libvirt
-    brew services start libvirt
+
+    brew install --cask utm
+
+    if [ -x /Applications/UTM.app/Contents/MacOS/utmctl ]; then
+      BREW_BIN="$(brew --prefix)/bin"
+      mkdir -p "$BREW_BIN"
+      ln -sf /Applications/UTM.app/Contents/MacOS/utmctl "$BREW_BIN/utmctl"
+    fi
   }
 
   if [ "$AUTO_DEPS" -eq 1 ]; then
     INSTALL_DEPS=y
   else
     echo ""
-    echo "  ⚠️  One or more required tools (virsh, virt-install, qemu-img) were not found."
     if [ "$OS" = "Darwin" ]; then
-      echo "  macOS:             brew install qemu libvirt && brew services start libvirt"
+      echo "  ⚠️  Required tool 'utmctl' was not found."
+      echo "  macOS:             brew install --cask utm"
+      echo "  then symlink:      ln -sf /Applications/UTM.app/Contents/MacOS/utmctl /usr/local/bin/utmctl"
     else
+      echo "  ⚠️  One or more required tools (virsh, virt-install, qemu-img) were not found."
       echo "  Debian/Ubuntu:     sudo apt install qemu-kvm libvirt-daemon-system virtinst"
       echo "  Fedora/RHEL:       sudo dnf install qemu-kvm libvirt virt-install"
       echo "  NixOS:             nix-env -iA nixpkgs.libvirt nixpkgs.virt-manager nixpkgs.qemu"
@@ -186,11 +203,15 @@ if [ "$DEPS_MISSING" -eq 1 ]; then
   esac
 fi
 
-ok "libvirt/virsh found"
+if [ "$RUN_PROVIDER" = "utm" ]; then
+  ok "utmctl found"
+else
+  ok "libvirt/virsh found"
+fi
 
 # ---------------------------------------------------------------------------
 # 3. Run the benchmark
 # ---------------------------------------------------------------------------
 
 info "Launching benchmark …"
-"$ICBM_BIN" run "$@"
+"$ICBM_BIN" run --provider "$RUN_PROVIDER" "$@"

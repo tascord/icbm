@@ -9,9 +9,16 @@ this is a hyper specific tool for benchmarking 86x rust performance inside vms o
 curl -sSf https://raw.githubusercontent.com/tascord/icbm/main/install.sh | sh
 ```
 
+On macOS, the installer now uses UTM automatically (`--provider utm`) and will
+attempt to install UTM if `utmctl` is missing.
+
+If this is your first UTM automation run, macOS may ask you to grant Automation
+permissions to Terminal for controlling UTM.
+
 ### build
 ```
-# Prerequisites: Rust stable, libvirt / qemu-kvm, virt-install, qemu-img
+# Linux prerequisites: Rust stable, libvirt / qemu-kvm, virt-install, qemu-img
+# macOS prerequisites: Rust stable, UTM app + utmctl in PATH
 git clone --filter=blob:none --sparse https://github.com/tascord/icbm
 cd icbm
 git sparse-checkout set src Cargo.toml Cargo.lock
@@ -29,6 +36,7 @@ Commands:
 
 Options (run):
   --flavours <LIST>   Comma-separated VM flavours to benchmark [default: ubuntu,nixos]
+  --provider <NAME>   VM provider: auto, libvirt, utm [default: auto]
   --keep-vms          Keep VMs alive after the benchmark
   --json-out <PATH>   Write JSON report to file
   --skip-provision    Skip VM creation (reuse existing domains)

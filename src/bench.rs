@@ -90,7 +90,7 @@ const WORKSPACE_PATH: &str = "icbm/workspace";
 /// Connects to `ip` via SSH (using the key stored by `domain`), then runs all
 /// benchmark steps, returning their combined results.
 pub async fn run(domain: &Domain, ip: &str) -> Result<BenchResult> {
-    let sess = ssh_connect(ip, domain.ssh_user(), &domain.ssh_key_path()).await?;
+    let sess = ssh_connect(ip, domain.ssh_port(), domain.ssh_user(), &domain.ssh_key_path()).await?;
 
     let mut steps = vec![];
 
@@ -234,12 +234,12 @@ async fn run_step(sess: &Session, name: StepName, cmd: &str) -> Result<StepResul
 }
 
 /// Opens an SSH session to `ip` authenticating with the given private key.
-async fn ssh_connect(ip: &str, user: &str, key: &Path) -> Result<Session> {
+async fn ssh_connect(ip: &str, port: u16, user: &str, key: &Path) -> Result<Session> {
     // Retry for up to 60 s to handle race between VM boot and SSH daemon start.
     let deadline = std::time::Instant::now() + Duration::from_secs(60);
 
     loop {
-        let stream = TcpStream::connect(format!("{}:22", ip));
+        let stream = TcpStream::connect(format!("{}:{}", ip, port));
         if let Ok(tcp) = stream {
             tcp.set_read_timeout(Some(Duration::from_secs(30)))?;
             tcp.set_write_timeout(Some(Duration::from_secs(30)))?;
@@ -256,7 +256,7 @@ async fn ssh_connect(ip: &str, user: &str, key: &Path) -> Result<Session> {
         }
 
         if std::time::Instant::now() > deadline {
-            bail!("SSH connection to {} timed out", ip);
+            bail!("SSH connection to {}:{} timed out", ip, port);
         }
         tokio::time::sleep(Duration::from_secs(3)).await;
     }

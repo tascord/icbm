@@ -147,9 +147,9 @@ pub struct Domain {
     pub name: String,
     /// Path to the (overlay) disk image.
     disk: PathBuf,
+    /// Host SSH port to reach the guest (UTM uses forwarded port).
+    ssh_port: u16,
 }
-
-const SSH_PORT: u16 = 22;
 
 fn state_dir() -> PathBuf {
     if let Ok(dir) = env::var("ICBM_STATE_DIR") {
@@ -184,12 +184,26 @@ impl Domain {
                 format!("icbm-{}-{}", flavour, ts)
             }
         };
+
+        let ssh_port = match (resolved.clone(), &flavour) {
+            (Provider::Utm, Flavour::Ubuntu) => env::var("ICBM_UTM_UBUNTU_SSH_PORT")
+                .ok()
+                .and_then(|v| v.parse::<u16>().ok())
+                .unwrap_or(2222),
+            (Provider::Utm, Flavour::NixOs) => env::var("ICBM_UTM_NIXOS_SSH_PORT")
+                .ok()
+                .and_then(|v| v.parse::<u16>().ok())
+                .unwrap_or(2223),
+            _ => 22,
+        };
+
         let disk = vms_dir().join(format!("{}.qcow2", name));
         Domain {
             flavour,
             provider: resolved,
             name,
             disk,
+            ssh_port,
         }
     }
 
@@ -297,10 +311,81 @@ impl Domain {
     }
 
     async fn provision_utm(&self) -> Result<()> {
-        println!("  {} UTM VM '{}'", "Starting".bold(), self.name.cyan());
+        println!("  {} UTM VM '{}'", "Provisioning".bold(), self.name.cyan());
         check_tool("utmctl")?;
+
+        if !cfg!(target_os = "macos") {
+            bail!("UTM provisioning is only supported on macOS hosts");
+        }
+
+        std::fs::create_dir_all(images_dir())?;
+        std::fs::create_dir_all(vms_dir())?;
+
+        let info = image_info(&self.flavour);
+        let base = self.ensure_base_image(info.url).await?;
+        let seed = self.create_cloud_init_seed(info.user).await?;
+
+        if !self.utm_vm_exists()? {
+            check_tool("osascript")?;
+            self.create_utm_vm(&base, &seed, self.ssh_port)?;
+        }
+
+        println!("  {} UTM VM '{}'", "Starting".bold(), self.name.cyan());
         run_cmd("utmctl", &["start", &self.name])?;
         println!("  {} UTM VM '{}' started", "✓".green(), self.name.cyan());
+        Ok(())
+    }
+
+    fn utm_vm_exists(&self) -> Result<bool> {
+        let output = Command::new("utmctl").args(["list"]).output();
+        let output = match output {
+            Ok(o) => o,
+            Err(_) => return Ok(false),
+        };
+
+        if !output.status.success() {
+            return Ok(false);
+        }
+
+        let text = String::from_utf8_lossy(&output.stdout).to_lowercase();
+        let needle = self.name.to_lowercase();
+
+        Ok(text.lines().any(|line| {
+            let trimmed = line.trim().trim_matches('|').trim();
+            trimmed == needle || line.to_lowercase().contains(&needle)
+        }))
+    }
+
+    fn create_utm_vm(&self, base: &std::path::Path, seed: &std::path::Path, ssh_port: u16) -> Result<()> {
+        println!("    {} creating UTM VM '{}'", "•".dimmed(), self.name.cyan());
+
+        let arch = if std::env::consts::ARCH == "aarch64" {
+            "aarch64"
+        } else {
+            "x86_64"
+        };
+
+        let vm_name = applescript_quote(&self.name);
+        let base_path = applescript_quote(base.to_str().context("Invalid base image path")?);
+        let seed_path = applescript_quote(seed.to_str().context("Invalid seed image path")?);
+
+        let mut cmd = Command::new("osascript");
+        cmd.arg("-e").arg("tell application \"UTM\"");
+        cmd.arg("-e").arg(format!("set baseImage to POSIX file \"{}\"", base_path));
+        cmd.arg("-e").arg(format!("set seedImage to POSIX file \"{}\"", seed_path));
+        cmd.arg("-e").arg(format!(
+            "make new virtual machine with properties {{backend:qemu, configuration:{{name:\"{}\", architecture:\"{}\", memory:4096, cpu cores:2, hypervisor:true, drives:{{{{source:baseImage}}, {{removable:true, source:seedImage}}}}, network interfaces:{{{{mode:emulated, port forwards:{{{{protocol:TCP, host port:{}, guest port:22}}}}}}}}}}}}",
+            vm_name, arch, ssh_port
+        ));
+        cmd.arg("-e").arg("end tell");
+
+        let output = cmd.output().context("Failed to launch 'osascript'")?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("Failed to create UTM VM '{}': {}", self.name, stderr.trim());
+        }
+
+        println!("    {} created UTM VM with SSH forward localhost:{} -> guest:22", "✓".green(), ssh_port);
         Ok(())
     }
 
@@ -430,8 +515,8 @@ impl Domain {
     // Networking
     // -----------------------------------------------------------------------
 
-    /// Polls virsh / ARP until the domain reports an IP, then waits until
-    /// port 22 is open.
+    /// Polls provider-specific APIs until the domain reports an address, then
+    /// waits until the configured SSH port is open.
     pub async fn wait_for_ip(&self) -> Result<String> {
         println!("  {} IP and SSH …", "Waiting for".dimmed());
         let deadline = Instant::now() + Duration::from_secs(300);
@@ -442,11 +527,11 @@ impl Domain {
             }
 
             if let Some(ip) = if matches!(self.provider, Provider::Utm) {
-                self.query_ip_utm()?
+                self.query_ip_utm().or_else(|| Some("127.0.0.1".to_string()))
             } else {
                 self.query_ip()?
             } {
-                if tcp_connectable(&ip, SSH_PORT) {
+                if tcp_connectable(&ip, self.ssh_port) {
                     return Ok(ip);
                 }
             }
@@ -455,26 +540,26 @@ impl Domain {
         }
     }
 
-    fn query_ip_utm(&self) -> Result<Option<String>> {
+    fn query_ip_utm(&self) -> Option<String> {
         let output = Command::new("utmctl").args(["ip-address", &self.name]).output();
         let output = match output {
             Ok(o) => o,
-            Err(_) => return Ok(None),
+            Err(_) => return None,
         };
 
         if !output.status.success() {
-            return Ok(None);
+            return None;
         }
 
         let text = String::from_utf8_lossy(&output.stdout);
         for line in text.lines() {
             let ip = line.trim();
             if ip.parse::<IpAddr>().is_ok() {
-                return Ok(Some(ip.to_string()));
+                return Some(ip.to_string());
             }
         }
 
-        Ok(None)
+        None
     }
 
     fn query_ip(&self) -> Result<Option<String>> {
@@ -542,6 +627,11 @@ impl Domain {
     pub fn ssh_user(&self) -> &'static str {
         image_info(&self.flavour).user
     }
+
+    /// Returns the host-side SSH port for this domain.
+    pub fn ssh_port(&self) -> u16 {
+        self.ssh_port
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -573,6 +663,10 @@ fn run_cmd(program: &str, args: &[&str]) -> Result<()> {
         bail!("Command '{}' exited with status {}", program, status);
     }
     Ok(())
+}
+
+fn applescript_quote(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 fn tcp_connectable(host: &str, port: u16) -> bool {
