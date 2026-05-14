@@ -359,98 +359,61 @@ impl Domain {
     fn create_utm_vm(&self, base: &std::path::Path, seed: &std::path::Path, ssh_port: u16) -> Result<()> {
         println!("    {} creating UTM VM '{}'", "•".dimmed(), self.name.cyan());
 
-        let arch = if std::env::consts::ARCH == "aarch64" {
-            "aarch64"
-        } else {
-            "x86_64"
-        };
+        let arch = if std::env::consts::ARCH == "aarch64" { "aarch64" } else { "x86_64" };
 
         let vm_name = applescript_quote(&self.name);
         let base_path = applescript_quote(base.to_str().context("Invalid base image path")?);
         let seed_path = applescript_quote(seed.to_str().context("Invalid seed image path")?);
 
+        // Build the AppleScript using a single `make new virtual machine` call with
+        // the full configuration inline. The `update configuration` approach causes a
+        // -1700 coercion error because AppleScript records retrieved from UTM cannot
+        // be typed back as `qemu configuration`. Passing everything in the initial
+        // `make` call avoids this entirely.
+        //
+        // Network mode must be `emulated` — the sdef explicitly states port forwards
+        // are "only used in emulated mode".
         let mut script = String::new();
+        script.push_str("tell application \"UTM\"\n");
+        script.push_str("set baseImage to POSIX file \"");
+        script.push_str(&base_path);
+        script.push_str("\"\n");
+        script.push_str("set seedImage to POSIX file \"");
+        script.push_str(&seed_path);
+        script.push_str("\"\n");
+        script.push_str("make new virtual machine with properties {backend:qemu, configuration:{");
+        script.push_str("name:\"");
+        script.push_str(&vm_name);
+        script.push_str("\", architecture:\"");
+        script.push_str(arch);
+        script.push_str("\", memory:4096, cpu cores:2, hypervisor:true, ");
+        script.push_str("drives:{{source:baseImage}, {removable:true, source:seedImage}}, ");
+        script.push_str("network interfaces:{{mode:emulated, port forwards:{{protocol:TCP, host port:");
+        script.push_str(&ssh_port.to_string());
+        script.push_str(", guest port:22}}}}");
+        script.push_str("}}\n");
+        script.push_str("end tell\n");
 
-script.push_str("tell application \"UTM\"\n");
+        println!("    {} osascript:\n{}", "▸".dimmed(), script);
 
-script.push_str(&format!(
-    "set baseImage to POSIX file \"{}\"\n",
-    base_path
-));
+        // Execute via stdin so multi-line scripts are handled correctly.
+        use std::io::Write;
+        let mut child = Command::new("osascript")
+            .arg("-")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .context("Failed to launch osascript")?;
 
-script.push_str(&format!(
-    "set seedImage to POSIX file \"{}\"\n",
-    seed_path
-));
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(script.as_bytes()).context("Failed to write script to osascript stdin")?;
+        }
 
-//
-// Create VM FIRST
-//
-script.push_str(
-    "set vm to make new virtual machine with properties {backend:qemu}\n",
-);
+        let status = child.wait().context("osascript did not finish")?;
+        if !status.success() {
+            bail!("osascript failed (exit {})", status);
+        }
 
-script.push_str("delay 0.5\n");
-
-//
-// Fetch config object
-//
-script.push_str("set config to configuration of vm\n");
-
-//
-// Basic settings
-//
-script.push_str(&format!(
-    "set name of config to \"{}\"\n",
-    vm_name
-));
-
-script.push_str(&format!(
-    "set architecture of config to \"{}\"\n",
-    arch
-));
-
-script.push_str("set memory of config to 4096\n");
-script.push_str("set cpu cores of config to 2\n");
-script.push_str("set hypervisor of config to true\n");
-
-//
-// Drives (FIXED nesting)
-//
-script.push_str(
-    "set drives of config to {"
-);
-script.push_str(
-    "{source:baseImage}, "
-);
-script.push_str(
-    "{removable:true, source:seedImage}"
-);
-script.push_str("}\n");
-
-//
-// Networking
-//
-script.push_str(&format!(
-    "set network interfaces of config to {{\
-        {{\
-            mode:shared, \
-            port forwards:{{\
-                {{protocol:TCP, host port:{}, guest port:22}}\
-            }}\
-        }}\
-    }}\n",
-    ssh_port
-));
-
-//
-// Save config
-//
-script.push_str("update configuration of vm with config\n");
-
-script.push_str("end tell\n");
-
-        println!("    {} created UTM VM with SSH forward localhost:{} -> guest:22", "✓".green(), ssh_port);
+        println!("    {} created UTM VM '{}' with port forward localhost:{} -> guest:22", "✓".green(), self.name.cyan(), ssh_port);
         Ok(())
     }
 
