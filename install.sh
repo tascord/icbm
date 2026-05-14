@@ -84,12 +84,12 @@ download_binary() {
   
   info "Detecting latest release …"
   
-  # Get the latest release info
-  RELEASE_JSON=$(curl -sSf "$REPO/releases/latest" 2>/dev/null | head -c 1000000)
+  # Get the latest release info from the GitHub API
+  RELEASE_JSON=$(curl -sSfL "https://api.github.com/repos/tascord/icbm/releases/latest")
   
   # Extract download URL for the current platform
   ASSET_NAME="icbm-$OS_NAME-$ARCH_NAME"
-  DOWNLOAD_URL=$(echo "$RELEASE_JSON" | grep -o "\"browser_download_url\":\"[^\"]*$ASSET_NAME[^\"]*\"" | head -1 | cut -d'"' -f4)
+  DOWNLOAD_URL=$(echo "$RELEASE_JSON" | grep -o "\"browser_download_url\": \"[^\"]*$ASSET_NAME\"" | head -1 | cut -d'"' -f4)
   
   if [ -z "$DOWNLOAD_URL" ]; then
     err "Could not find a release binary for $OS_NAME-$ARCH_NAME. Check available releases at $REPO/releases"
