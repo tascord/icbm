@@ -463,9 +463,11 @@ impl Domain {
              - git\n  \
              - build-essential\n  \
              - pkg-config\n  \
-             - libssl-dev\n\
+             - libssl-dev\n  \
+             - qemu-guest-agent\n\
              runcmd:\n  \
-             - systemctl enable --now ssh\n"
+             - systemctl enable --now ssh\n  \
+             - systemctl enable --now qemu-guest-agent\n"
         );
 
         let seed_dir = vms_dir().join(format!("{}-seed", self.name));
@@ -554,8 +556,13 @@ impl Domain {
     }
 
     fn query_ip_utm(&self) -> Option<String> {
-        let output = Command::new("utmctl").args(["ip-address", &self.name]).output();
-        let output = match output {
+        // For UTM, we use port forwarding (localhost:<host_port> -> guest:22), so we don't strictly
+        // need the guest IP. The utmctl ip-address command requires QEMU guest agent to be running.
+        // We try it briefly, but don't wait long — if it fails, we just use 127.0.0.1.
+        let output = match Command::new("utmctl")
+            .args(["ip-address", &self.name])
+            .output()
+        {
             Ok(o) => o,
             Err(_) => return None,
         };
