@@ -369,38 +369,86 @@ impl Domain {
         let base_path = applescript_quote(base.to_str().context("Invalid base image path")?);
         let seed_path = applescript_quote(seed.to_str().context("Invalid seed image path")?);
 
-        // Build the AppleScript command step-by-step to avoid format string brace issues
         let mut script = String::new();
-        script.push_str("tell application \"UTM\"\n");
-        script.push_str(&format!("set baseImage to POSIX file \"{}\"\n", base_path));
-        script.push_str(&format!("set seedImage to POSIX file \"{}\"\n", seed_path));
-        script.push_str(&format!("set vm to make new virtual machine with properties {{backend:qemu, configuration:{{name:\"{}\", architecture:\"{}\"}}}}\n", vm_name, arch));
-        script.push_str("delay 0.5\n");
-        script.push_str("set config to configuration of vm\n");
-        script.push_str("set memory of config to 4096\n");
-        script.push_str("set cpu cores of config to 2\n");
-        script.push_str("set hypervisor of config to true\n");
-        script.push_str("update configuration of vm with config\n");
-        script.push_str("delay 0.5\n");
-        script.push_str("set config to configuration of vm\n");
-        script.push_str("set drives of config to {{{{source:baseImage}}, {{removable:true, source:seedImage}}}}\n");
-        script.push_str("update configuration of vm with config\n");
-        script.push_str("delay 0.5\n");
-        script.push_str("set config to configuration of vm\n");
-        script.push_str(&format!("set network interfaces of config to {{{{mode:emulated, port forwards:{{{{protocol:TCP, host port:{}, guest port:22}}}}}}}}}}\n", ssh_port));
-        script.push_str("update configuration of vm with config\n");
-        script.push_str("end tell\n");
 
-        let output = Command::new("osascript")
-            .arg("-e")
-            .arg(&script)
-            .output()
-            .context("Failed to launch 'osascript'")?;
+script.push_str("tell application \"UTM\"\n");
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("Failed to create UTM VM '{}': {}", self.name, stderr.trim());
-        }
+script.push_str(&format!(
+    "set baseImage to POSIX file \"{}\"\n",
+    base_path
+));
+
+script.push_str(&format!(
+    "set seedImage to POSIX file \"{}\"\n",
+    seed_path
+));
+
+//
+// Create VM FIRST
+//
+script.push_str(
+    "set vm to make new virtual machine with properties {backend:qemu}\n",
+);
+
+script.push_str("delay 0.5\n");
+
+//
+// Fetch config object
+//
+script.push_str("set config to configuration of vm\n");
+
+//
+// Basic settings
+//
+script.push_str(&format!(
+    "set name of config to \"{}\"\n",
+    vm_name
+));
+
+script.push_str(&format!(
+    "set architecture of config to \"{}\"\n",
+    arch
+));
+
+script.push_str("set memory of config to 4096\n");
+script.push_str("set cpu cores of config to 2\n");
+script.push_str("set hypervisor of config to true\n");
+
+//
+// Drives (FIXED nesting)
+//
+script.push_str(
+    "set drives of config to {"
+);
+script.push_str(
+    "{source:baseImage}, "
+);
+script.push_str(
+    "{removable:true, source:seedImage}"
+);
+script.push_str("}\n");
+
+//
+// Networking
+//
+script.push_str(&format!(
+    "set network interfaces of config to {{\
+        {{\
+            mode:shared, \
+            port forwards:{{\
+                {{protocol:TCP, host port:{}, guest port:22}}\
+            }}\
+        }}\
+    }}\n",
+    ssh_port
+));
+
+//
+// Save config
+//
+script.push_str("update configuration of vm with config\n");
+
+script.push_str("end tell\n");
 
         println!("    {} created UTM VM with SSH forward localhost:{} -> guest:22", "✓".green(), ssh_port);
         Ok(())
