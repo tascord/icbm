@@ -59,7 +59,7 @@ detect_os_arch() {
       OS_NAME="linux"
       ;;
     Darwin)
-      OS_NAME="darwin"
+      OS_NAME="macos"
       ;;
     *)
       err "Unsupported OS: $OS"
