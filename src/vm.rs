@@ -369,27 +369,34 @@ impl Domain {
         let base_path = applescript_quote(base.to_str().context("Invalid base image path")?);
         let seed_path = applescript_quote(seed.to_str().context("Invalid seed image path")?);
 
-        let mut cmd = Command::new("osascript");
-        cmd.arg("-e").arg("tell application \"UTM\"");
-        cmd.arg("-e").arg(format!("set baseImage to POSIX file \"{}\"", base_path));
-        cmd.arg("-e").arg(format!("set seedImage to POSIX file \"{}\"", seed_path));
-        cmd.arg("-e").arg(format!(
-            "set vm to make new virtual machine with properties {{backend:qemu, configuration:{{name:\"{}\", architecture:\"{}\"}}}}",
-            vm_name, arch
-        ));
-        cmd.arg("-e").arg("set config to configuration of vm");
-        cmd.arg("-e").arg("set memory of config to 4096");
-        cmd.arg("-e").arg("set cpu cores of config to 2");
-        cmd.arg("-e").arg("set hypervisor of config to true");
-        cmd.arg("-e").arg("set drives of config to {{source:baseImage}, {removable:true, source:seedImage}} ");
-        cmd.arg("-e").arg(format!(
-            "set network interfaces of config to {{{{mode:emulated, port forwards:{{{{protocol:TCP, host port:{}, guest port:22}}}}}}}}",
-            ssh_port
-        ));
-        cmd.arg("-e").arg("update configuration of vm with config");
-        cmd.arg("-e").arg("end tell");
+        // Build the AppleScript command step-by-step to avoid format string brace issues
+        let mut script = String::new();
+        script.push_str("tell application \"UTM\"\n");
+        script.push_str(&format!("set baseImage to POSIX file \"{}\"\n", base_path));
+        script.push_str(&format!("set seedImage to POSIX file \"{}\"\n", seed_path));
+        script.push_str(&format!("set vm to make new virtual machine with properties {{backend:qemu, configuration:{{name:\"{}\", architecture:\"{}\"}}}}\n", vm_name, arch));
+        script.push_str("delay 0.5\n");
+        script.push_str("set config to configuration of vm\n");
+        script.push_str("set memory of config to 4096\n");
+        script.push_str("set cpu cores of config to 2\n");
+        script.push_str("set hypervisor of config to true\n");
+        script.push_str("update configuration of vm with config\n");
+        script.push_str("delay 0.5\n");
+        script.push_str("set config to configuration of vm\n");
+        script.push_str("set drives of config to {{{{source:baseImage}}, {{removable:true, source:seedImage}}}}\n");
+        script.push_str("update configuration of vm with config\n");
+        script.push_str("delay 0.5\n");
+        script.push_str("set config to configuration of vm\n");
+        script.push_str(&format!("set network interfaces of config to {{{{mode:emulated, port forwards:{{{{protocol:TCP, host port:{}, guest port:22}}}}}}}}}}\n", ssh_port));
+        script.push_str("update configuration of vm with config\n");
+        script.push_str("end tell\n");
 
-        let output = cmd.output().context("Failed to launch 'osascript'")?;
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()
+            .context("Failed to launch 'osascript'")?;
+
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             bail!("Failed to create UTM VM '{}': {}", self.name, stderr.trim());
