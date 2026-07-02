@@ -84,7 +84,7 @@ download_binary() {
   RELEASE_JSON=$(curl -sSfL "https://api.github.com/repos/tascord/icbm/releases/latest")
 
   ASSET_NAME="icbm-$OS_NAME-$ARCH_NAME"
-  DOWNLOAD_URL=$(echo "$RELEASE_JSON" | grep -o '"browser_download_url": "[^"]*'."${ASSET_NAME}"'."' | head -1 | sed 's/.*: "//;s/"$//')
+  DOWNLOAD_URL=$(echo "$RELEASE_JSON" | grep -o '"browser_download_url": "[^"]*"' | grep "$ASSET_NAME" | head -1 | sed 's/.*: "//;s/"$//')
 
   if [ -z "$DOWNLOAD_URL" ]; then
     err "Could not find a release binary for $OS_NAME-$ARCH_NAME. Check available releases at $REPO/releases"
