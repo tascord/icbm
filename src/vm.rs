@@ -12,7 +12,8 @@ use colored::Colorize;
 use std::{
     env,
     fmt,
-    net::{IpAddr, TcpStream},
+    io::Read,
+    net::{IpAddr, TcpStream, ToSocketAddrs},
     path::PathBuf,
     process::Command,
     str::FromStr,
@@ -312,7 +313,6 @@ impl Domain {
 
     async fn provision_utm(&self) -> Result<()> {
         println!("  {} UTM VM '{}'", "Provisioning".bold(), self.name.cyan());
-        check_tool("utmctl")?;
 
         if !cfg!(target_os = "macos") {
             bail!("UTM provisioning is only supported on macOS hosts");
@@ -325,95 +325,34 @@ impl Domain {
         let base = self.ensure_base_image(info.url).await?;
         let seed = self.create_cloud_init_seed(info.user).await?;
 
-        if !self.utm_vm_exists()? {
-            check_tool("osascript")?;
-            self.create_utm_vm(&base, &seed, self.ssh_port)?;
+        let mgr = utmvm::UtmManager::new();
+
+        if !mgr.exists(&self.name).await? {
+            let config = utmvm::VmConfig::builder(&self.name)
+                .architecture(if std::env::consts::ARCH == "aarch64" {
+                    utmvm::Architecture::Aarch64
+                } else {
+                    utmvm::Architecture::X86_64
+                })
+                .memory_mb(4096)
+                .cpu_count(2)
+                .hypervisor(true)
+                .drive(utmvm::DriveConfig::disk_image(&base))
+                .drive(utmvm::DriveConfig::cdrom(&seed))
+                .network_mode(utmvm::NetworkMode::Emulated)
+                .port_forward(utmvm::PortForward {
+                    protocol: "TCP".to_string(),
+                    host_port: self.ssh_port,
+                    guest_port: 22,
+                })
+                .build();
+
+            mgr.create(&config).await?;
         }
 
         println!("  {} UTM VM '{}'", "Starting".bold(), self.name.cyan());
-        run_cmd("utmctl", &["start", &self.name])?;
+        mgr.start(&self.name).await?;
         println!("  {} UTM VM '{}' started", "✓".green(), self.name.cyan());
-        Ok(())
-    }
-
-    fn utm_vm_exists(&self) -> Result<bool> {
-        let output = Command::new("utmctl").args(["list"]).output();
-        let output = match output {
-            Ok(o) => o,
-            Err(_) => return Ok(false),
-        };
-
-        if !output.status.success() {
-            return Ok(false);
-        }
-
-        let text = String::from_utf8_lossy(&output.stdout).to_lowercase();
-        let needle = self.name.to_lowercase();
-
-        Ok(text.lines().any(|line| {
-            let trimmed = line.trim().trim_matches('|').trim();
-            trimmed == needle || line.to_lowercase().contains(&needle)
-        }))
-    }
-
-    fn create_utm_vm(&self, base: &std::path::Path, seed: &std::path::Path, ssh_port: u16) -> Result<()> {
-        println!("    {} creating UTM VM '{}'", "•".dimmed(), self.name.cyan());
-
-        let arch = if std::env::consts::ARCH == "aarch64" { "aarch64" } else { "x86_64" };
-
-        let vm_name = applescript_quote(&self.name);
-        let base_path = applescript_quote(base.to_str().context("Invalid base image path")?);
-        let seed_path = applescript_quote(seed.to_str().context("Invalid seed image path")?);
-
-        // Build the AppleScript using a single `make new virtual machine` call with
-        // the full configuration inline. The `update configuration` approach causes a
-        // -1700 coercion error because AppleScript records retrieved from UTM cannot
-        // be typed back as `qemu configuration`. Passing everything in the initial
-        // `make` call avoids this entirely.
-        //
-        // Network mode must be `emulated` — the sdef explicitly states port forwards
-        // are "only used in emulated mode".
-        let mut script = String::new();
-        script.push_str("tell application \"UTM\"\n");
-        script.push_str("set baseImage to POSIX file \"");
-        script.push_str(&base_path);
-        script.push_str("\"\n");
-        script.push_str("set seedImage to POSIX file \"");
-        script.push_str(&seed_path);
-        script.push_str("\"\n");
-        script.push_str("make new virtual machine with properties {backend:qemu, configuration:{");
-        script.push_str("name:\"");
-        script.push_str(&vm_name);
-        script.push_str("\", architecture:\"");
-        script.push_str(arch);
-        script.push_str("\", memory:4096, cpu cores:2, hypervisor:true, ");
-        script.push_str("drives:{{source:baseImage}, {removable:true, source:seedImage}}, ");
-        script.push_str("network interfaces:{{mode:emulated, port forwards:{{protocol:TCP, host port:");
-        script.push_str(&ssh_port.to_string());
-        script.push_str(", guest port:22}}}}");
-        script.push_str("}}\n");
-        script.push_str("end tell\n");
-
-        println!("    {} osascript:\n{}", "▸".dimmed(), script);
-
-        // Execute via stdin so multi-line scripts are handled correctly.
-        use std::io::Write;
-        let mut child = Command::new("osascript")
-            .arg("-")
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .context("Failed to launch osascript")?;
-
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(script.as_bytes()).context("Failed to write script to osascript stdin")?;
-        }
-
-        let status = child.wait().context("osascript did not finish")?;
-        if !status.success() {
-            bail!("osascript failed (exit {})", status);
-        }
-
-        println!("    {} created UTM VM '{}' with port forward localhost:{} -> guest:22", "✓".green(), self.name.cyan(), ssh_port);
         Ok(())
     }
 
@@ -560,11 +499,12 @@ impl Domain {
             }
 
             if let Some(ip) = if matches!(self.provider, Provider::Utm) {
-                self.query_ip_utm().or_else(|| Some("127.0.0.1".to_string()))
+                self.query_ip_utm()
+                    .or_else(|| Some("127.0.0.1".to_string()))
             } else {
                 self.query_ip()?
             } {
-                if tcp_connectable(&ip, self.ssh_port) {
+                if tcp_connectable(&ip, self.ssh_port) && ssh_banner_visible(&ip, self.ssh_port) {
                     return Ok(ip);
                 }
             }
@@ -636,7 +576,8 @@ impl Domain {
     /// Destroys the domain and removes its disk / seed images.
     pub async fn destroy(&self) -> Result<()> {
         if matches!(self.provider, Provider::Utm) {
-            let _ = run_cmd("utmctl", &["stop", &self.name]);
+            let mgr = utmvm::UtmManager::new();
+            let _ = mgr.stop(&self.name).await;
             println!("  {} UTM VM '{}' stopped", "✓".green(), self.name.cyan());
             return Ok(());
         }
@@ -703,10 +644,6 @@ fn run_cmd(program: &str, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-fn applescript_quote(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
 fn tcp_connectable(host: &str, port: u16) -> bool {
     use std::net::ToSocketAddrs;
     let addr = format!("{}:{}", host, port);
@@ -716,4 +653,88 @@ fn tcp_connectable(host: &str, port: u16) -> bool {
         }
     }
     false
+}
+
+/// Probes whether an SSH server on `host:port` is sending a banner.
+///
+/// Unlike `tcp_connectable`, this actually reads the first bytes from the
+/// server to make sure sshd is fully initialised and responsive, not just
+/// that the port is open.
+fn ssh_banner_visible(host: &str, port: u16) -> bool {
+    let addr = format!("{}:{}", host, port);
+    let Ok(mut stream) = TcpStream::connect_timeout(
+        &addr.parse::<std::net::SocketAddr>().unwrap_or_else(|_| {
+            (host, port).to_socket_addrs().unwrap().next().unwrap()
+        }),
+        Duration::from_secs(3),
+    ) else {
+        return false;
+    };
+
+    let mut buf = [0u8; 8];
+    let Ok(n) = stream.read(&mut buf) else {
+        return false;
+    };
+
+    n >= 4 && &buf[..4] == b"SSH-"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_domain_ssh_port_ubuntu() {
+        let d = Domain::new(Flavour::Ubuntu, Provider::Utm);
+        assert_eq!(d.ssh_port(), 2222);
+        assert_eq!(d.ssh_user(), "ubuntu");
+    }
+
+    #[test]
+    fn test_domain_ssh_port_nixos() {
+        let d = Domain::new(Flavour::NixOs, Provider::Utm);
+        assert_eq!(d.ssh_port(), 2223);
+        assert_eq!(d.ssh_user(), "root");
+    }
+
+    #[test]
+    fn test_domain_libvirt_different_ports() {
+        let d = Domain::new(Flavour::Ubuntu, Provider::Libvirt);
+        assert_eq!(d.ssh_port(), 22);
+    }
+
+    // -----------------------------------------------------------------------
+    // Conditional integration test — only runs when ./test.iso is present.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_provision_utm_with_test_iso() {
+        if !std::path::Path::new("./test.iso").exists() {
+            eprintln!("Skipping integration test: ./test.iso not found");
+            return;
+        }
+
+        // This test is gated behind the ./test.iso file so it doesn't run
+        // automatically in CI or on machines without a test image.
+        //
+        // To use it:
+        //   1. Place a small bootable ISO named `test.iso` in the icbm root.
+        //   2. Ensure UTM is installed and running.
+        //   3. Run `cargo test -- test_provision_utm_with_test_iso`
+        //
+        // The test will create a VM named `icbm-ubuntu`, start it, and wait
+        // for SSH to become reachable on localhost:2222.
+        let domain = Domain::new(Flavour::Ubuntu, Provider::Utm);
+
+        // Provision (downloads base image unless already cached).
+        domain.provision_utm().await.expect("UTM provisioning failed");
+
+        // Wait for SSH to come up on the forwarded port.
+        let ip = domain.wait_for_ip().await.expect("Timed out waiting for IP");
+        assert!(tcp_connectable(&ip, domain.ssh_port()));
+
+        // Stop without deleting (caller can inspect the VM manually).
+        let mgr = utmvm::UtmManager::new();
+        let _ = mgr.stop(&domain.name).await;
+    }
 }
