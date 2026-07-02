@@ -2,7 +2,10 @@
 
 use colored::Colorize;
 
-use crate::score::ScoredResult;
+use crate::{
+    metrics,
+    score::ScoredResult,
+};
 
 // ---------------------------------------------------------------------------
 // Print per-flavour summary
@@ -13,6 +16,8 @@ pub fn print_summary(result: &ScoredResult) {
         "\n  ┌─ {} Results ─────────────────────────────────",
         result.flavour.to_string().yellow().bold()
     );
+
+    print_host_info();
 
     for (s, step_result) in result.step_scores.iter().zip(result.bench.steps.iter()) {
         let bar = score_bar(s.score);
@@ -84,6 +89,30 @@ pub fn print_leaderboard(results: &[ScoredResult]) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+fn print_host_info() {
+    let info = metrics::host_info();
+    println!(
+        "  │  {} {:24} {}  {}",
+        "OS".cyan().bold(),
+        info.os,
+        "Host".cyan().bold(),
+        info.hostname
+    );
+    println!(
+        "  │  {} {:24} {}  {}",
+        "Kernel".cyan().bold(),
+        info.kernel,
+        "Memory".cyan().bold(),
+        format!("{} MiB", info.total_memory_mib)
+    );
+    println!(
+        "  │  {}  {}",
+        "CPU".cyan().bold(),
+        format!("{} ({} cores)", info.cpu_brand, info.cpu_count)
+    );
+    println!("  │");
+}
 
 fn score_bar(score: u32) -> String {
     let filled = (score / 100).min(10) as usize;

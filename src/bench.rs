@@ -7,6 +7,10 @@
 //! 3. Run `cargo clippy --fix` on the workspace.
 //! 4. Run `cargo build` (dev profile) on the workspace.
 //! 5. Run `cargo build --release` on the workspace.
+//! 6. Append a comment to `crates/app/src/main.rs` and rebuild (dev) to
+//!    stress-test incremental linking.
+//! 7. Append a comment to `crates/app/src/main.rs` and rebuild (release) to
+//!    stress-test incremental linking.
 //!
 //! Each step is timed and its host-side CPU / memory usage is tracked with
 //! [`crate::metrics::Sampler`].
@@ -32,6 +36,8 @@ pub enum StepName {
     ClippyFix,
     BuildDev,
     BuildRelease,
+    LinkDev,
+    LinkRelease,
 }
 
 impl std::fmt::Display for StepName {
@@ -42,6 +48,8 @@ impl std::fmt::Display for StepName {
             StepName::ClippyFix => write!(f, "cargo clippy --fix"),
             StepName::BuildDev => write!(f, "cargo build (dev)"),
             StepName::BuildRelease => write!(f, "cargo build --release"),
+            StepName::LinkDev => write!(f, "link (dev)"),
+            StepName::LinkRelease => write!(f, "link (release)"),
         }
     }
 }
@@ -167,6 +175,40 @@ pub async fn run(domain: &Domain) -> Result<BenchResult> {
             &format!(
                 ". $HOME/.cargo/env \
                  && cd {WORKSPACE_PATH} \
+                 && cargo build --release 2>&1"
+            ),
+        )
+        .await?,
+    );
+
+    // -----------------------------------------------------------------------
+    // Step 6: incremental link (dev)
+    // -----------------------------------------------------------------------
+    steps.push(
+        run_step(
+            domain,
+            StepName::LinkDev,
+            &format!(
+                ". $HOME/.cargo/env \
+                 && cd {WORKSPACE_PATH} \
+                 && echo '// link-bench dev' >> crates/app/src/main.rs \
+                 && cargo build 2>&1"
+            ),
+        )
+        .await?,
+    );
+
+    // -----------------------------------------------------------------------
+    // Step 7: incremental link (release)
+    // -----------------------------------------------------------------------
+    steps.push(
+        run_step(
+            domain,
+            StepName::LinkRelease,
+            &format!(
+                ". $HOME/.cargo/env \
+                 && cd {WORKSPACE_PATH} \
+                 && echo '// link-bench release' >> crates/app/src/main.rs \
                  && cargo build --release 2>&1"
             ),
         )

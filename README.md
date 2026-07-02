@@ -43,13 +43,15 @@ Options (run):
 ```
 
 ### benchmark
-| #   | Step                    | What it measures                          |
-| --- | ----------------------- | ----------------------------------------- |
-| 1   | Install Rust            | rustup download + toolchain install speed |
-| 2   | Clone workspace         | git sparse-checkout speed                 |
-| 3   | `cargo clippy --fix`    | incremental analysis speed                |
-| 4   | `cargo build` (dev)     | debug build throughput                    |
-| 5   | `cargo build --release` | optimised build throughput                |
+| #   | Step                              | What it measures                          |
+| --- | --------------------------------- | ----------------------------------------- |
+| 1   | Install Rust                      | rustup download + toolchain install speed |
+| 2   | Clone workspace                   | git sparse-checkout speed                 |
+| 3   | `cargo clippy --fix`              | incremental analysis speed                |
+| 4   | `cargo build` (dev)               | debug build throughput                    |
+| 5   | `cargo build --release`           | optimised build throughput                |
+| 6   | Link (dev)                        | incremental linking speed after edit      |
+| 7   | Link (release)                    | incremental linking speed after edit      |
 
 Each step is wrapped in a sampler that records:
   - Wall-clock elapsed time
