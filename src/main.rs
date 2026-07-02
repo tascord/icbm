@@ -36,7 +36,7 @@ enum Commands {
         #[arg(long, default_value = "ubuntu")]
         flavours: String,
 
-        /// VM provider: auto, libvirt, docker
+        /// VM provider: docker (default: auto -> docker)
         #[arg(long, default_value = "auto")]
         provider: String,
 
@@ -48,9 +48,7 @@ enum Commands {
         #[arg(long)]
         json_out: Option<std::path::PathBuf>,
 
-        /// Skip VM provisioning; assume virsh domains already exist with the
-        /// given names and that SSH is reachable via the addresses printed
-        /// during a previous run.
+        /// Skip VM provisioning; reuse an existing container from a previous run.
         #[arg(long, default_value_t = false)]
         skip_provision: bool,
     },
@@ -72,11 +70,10 @@ async fn main() -> Result<()> {
         json_out: None,
         skip_provision: false,
     }) {
-        Commands::Run { flavours, provider, keep_vms, json_out, skip_provision } => {
+        Commands::Run { flavours, provider: _, keep_vms, json_out, skip_provision } => {
             let requested: Vec<vm::Flavour> = flavours.split(',').map(|s| s.trim().parse()).collect::<Result<_, _>>()?;
-            let provider: vm::Provider = provider.parse()?;
 
-            run_benchmark(requested, provider, keep_vms, json_out, skip_provision).await?;
+            run_benchmark(requested, keep_vms, json_out, skip_provision).await?;
         }
 
         Commands::HostInfo => {
@@ -90,7 +87,6 @@ async fn main() -> Result<()> {
 
 async fn run_benchmark(
     flavours: Vec<vm::Flavour>,
-    provider: vm::Provider,
     keep_vms: bool,
     json_out: Option<std::path::PathBuf>,
     skip_provision: bool,
@@ -103,13 +99,13 @@ async fn run_benchmark(
         // ------------------------------------------------------------------
         // 1. Provision VM (unless caller asked to skip)
         // ------------------------------------------------------------------
-        let domain = vm::Domain::new(flavour.clone(), provider.clone());
+        let domain = vm::Domain::new(flavour.clone());
 
         if !skip_provision {
             domain.provision().await?;
         }
 
-        let _ = domain.wait_for_ip().await?;
+        domain.wait_ready().await?;
 
         // ------------------------------------------------------------------
         // 2. Run benchmark steps inside the VM/container, collecting metrics

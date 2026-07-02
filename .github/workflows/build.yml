@@ -17,11 +17,11 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
             artifact_name: icbm
             asset_name: icbm-linux-x86_64
           - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
+            target: aarch64-unknown-linux-musl
             artifact_name: icbm
             asset_name: icbm-linux-aarch64
           - os: macos-latest
@@ -38,22 +38,15 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install dependencies
+      - name: Install build dependencies
         run: |
           if [ "$RUNNER_OS" == "Linux" ]; then
             sudo apt-get update
-            sudo apt-get install -y libssl-dev pkg-config lld mold qemu-kvm libvirt-daemon-system virtinst cloud-image-utils qemu-user-static binfmt-support
-            sudo systemctl start libvirtd || true
-            printf '<network>\n  <name>default</name>\n  <bridge name="virbr0"/>\n  <forward/>\n  <ip address="192.168.122.1" netmask="255.255.255.0">\n    <dhcp>\n      <range start="192.168.122.2" end="192.168.122.254"/>\n    </dhcp>\n  </ip>\n</network>\n' > default.xml
-            sudo virsh --connect qemu:///system net-define default.xml || true
-            sudo virsh --connect qemu:///system net-autostart default || true
-            sudo virsh --connect qemu:///system net-start default || true
+            sudo apt-get install -y musl-tools
           elif [ "$RUNNER_OS" == "macOS" ]; then
-            brew install openssl pkg-config qemu libvirt
-            sudo ln -sf /opt/homebrew/bin/qemu-* /usr/local/bin/ || true
-            export PATH="/opt/homebrew/bin:$PATH"
-            nohup libvirtd &
-            sleep 3
+            # No native dependencies needed; binary links only against
+            # system frameworks.
+            true
           fi
         shell: bash
 
@@ -70,51 +63,10 @@ jobs:
           name: ${{ matrix.asset_name }}
           path: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
 
-      - name: Run benchmark
-        if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-apple-darwin'
-        continue-on-error: true
+      - name: Run smoke test
         run: |
-          BENCH_PROVIDER="auto"
-          if [ "$RUNNER_OS" == "macOS" ]; then
-            LIBVIRT_DEFAULT_URI="qemu:///session"
-            SUDO_CMD=""
-            export ICBM_VIRT_NETWORK="user"
-            export ICBM_STATE_DIR="${RUNNER_TEMP}/icbm"
-          else
-            LIBVIRT_DEFAULT_URI="qemu:///system"
-            SUDO_CMD="sudo --preserve-env=ICBM_STATE_DIR,LIBVIRT_DEFAULT_URI,ICBM_VIRT_NETWORK"
-            export ICBM_VIRT_NETWORK="network=default"
-            export ICBM_STATE_DIR="/tmp/icbm"
-          fi
-          
-          # Initialize step summary for this runner
-          echo "### Benchmark: ${{ matrix.asset_name }}" >> $GITHUB_STEP_SUMMARY
-
-          echo "#### Host Machine Specs" >> $GITHUB_STEP_SUMMARY
-          if [ "$RUNNER_OS" == "macOS" ]; then
-            CPU=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "Apple Silicon")
-            CORES=$(sysctl -n hw.ncpu 2>/dev/null || echo "?")
-            RAM=$(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1073741824 ))GB
-          else
-            CPU=$(grep -m 1 'model name' /proc/cpuinfo | cut -d ':' -f 2 | xargs || echo "Unknown CPU")
-            CORES=$(nproc 2>/dev/null || echo "?")
-            RAM=$(free -h 2>/dev/null | awk '/^Mem:/ {print $2}' || echo "?")
-          fi
-          echo "- **CPU**: $CPU ($CORES cores)" >> $GITHUB_STEP_SUMMARY
-          echo "- **RAM**: $RAM" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          echo "| OS | Target | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|---|---|---|" >> $GITHUB_STEP_SUMMARY
-          
-          if ICBM_STATE_DIR="${ICBM_STATE_DIR}" LIBVIRT_DEFAULT_URI="${LIBVIRT_DEFAULT_URI}" ICBM_VIRT_NETWORK="${ICBM_VIRT_NETWORK}" $SUDO_CMD target/${{ matrix.target }}/release/${{ matrix.artifact_name }} run --provider "$BENCH_PROVIDER" 2>&1; then
-            echo "| ${{ matrix.os }} | ${{ matrix.target }} | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
-          else
-            EXIT_CODE=$?
-            echo "| ${{ matrix.os }} | ${{ matrix.target }} | ❌ Failed (Code: $EXIT_CODE) |" >> $GITHUB_STEP_SUMMARY
-          fi
+          target/${{ matrix.target }}/release/${{ matrix.artifact_name }} host-info
         shell: bash
-
 
   release:
     name: Create Release
@@ -169,9 +121,7 @@ jobs:
           body_path: release_body.txt
           files: |
             artifacts/icbm-*
-            
           draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-

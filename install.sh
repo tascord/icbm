@@ -4,28 +4,16 @@
 #
 # Usage:
 #   curl -sSf https://raw.githubusercontent.com/tascord/icbm/main/install.sh | sh
-#   curl -sSf https://raw.githubusercontent.com/tascord/icbm/main/install.sh | sh -s -- --install-deps
 #
-# Flags:
-#   --install-deps   Automatically install missing system dependencies without prompting.
-#
-# The script will:
-#   1. Optionally install Docker (preferred) or libvirt/qemu (Linux fallback).
-#   2. Download the latest icbm binary from GitHub releases.
+# This script will:
+#   1. Download the latest icbm binary from GitHub releases.
+#   2. Download Docker CLI static binary if docker is not found (Linux only).
 #   3. Run the benchmark.
+#
+# Runs entirely without sudo. All downloaded binaries are placed under
+# $HOME/.local/share/icbm/bin and prepend to PATH at runtime.
 
 set -eu
-
-# ---------------------------------------------------------------------------
-# Parse flags
-# ---------------------------------------------------------------------------
-
-AUTO_DEPS=0
-for arg in "$@"; do
-  case "$arg" in
-    --install-deps) AUTO_DEPS=1 ;;
-  esac
-done
 
 REPO="https://github.com/tascord/icbm"
 CLONE_DIR="${ICBM_DIR:-$HOME/.local/share/icbm}"
@@ -48,7 +36,7 @@ ok()    { printf '\033[1;32m ✓  \033[0m%s\n' "$*"; }
 err()   { printf '\033[1;31m ✗  \033[0m%s\n' "$*" >&2; exit 1; }
 
 # ---------------------------------------------------------------------------
-# Detect platform and binary download functions
+# Detect platform
 # ---------------------------------------------------------------------------
 
 detect_os_arch() {
@@ -84,17 +72,19 @@ detect_os_arch() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# 1. Download the latest icbm binary
+# ---------------------------------------------------------------------------
+
 download_binary() {
   detect_os_arch
 
   info "Detecting latest release …"
 
-  # Get the latest release info from the GitHub API
   RELEASE_JSON=$(curl -sSfL "https://api.github.com/repos/tascord/icbm/releases/latest")
 
-  # Extract download URL for the current platform
   ASSET_NAME="icbm-$OS_NAME-$ARCH_NAME"
-  DOWNLOAD_URL=$(echo "$RELEASE_JSON" | grep -o "\"browser_download_url\": \"[^\"]*$ASSET_NAME\"" | head -1 | cut -d'"' -f4)
+  DOWNLOAD_URL=$(echo "$RELEASE_JSON" | grep -o '"browser_download_url": "[^"]*'."${ASSET_NAME}"'."' | head -1 | sed 's/.*: "//;s/"$//')
 
   if [ -z "$DOWNLOAD_URL" ]; then
     err "Could not find a release binary for $OS_NAME-$ARCH_NAME. Check available releases at $REPO/releases"
@@ -103,13 +93,7 @@ download_binary() {
   mkdir -p "$BIN_DIR"
   ICBM_BIN="$BIN_DIR/icbm"
 
-  if [ -f "$ICBM_BIN" ]; then
-    # Check if we already have the latest version
-    info "Downloading latest icbm binary …"
-  else
-    info "Downloading icbm binary …"
-  fi
-
+  info "Downloading icbm binary …"
   curl -sSfL "$DOWNLOAD_URL" -o "$ICBM_BIN"
   chmod +x "$ICBM_BIN"
 
@@ -117,118 +101,79 @@ download_binary() {
 }
 
 # ---------------------------------------------------------------------------
-# 1. Download the latest binary
+# 2. Ensure Docker CLI is available (Linux only)
 # ---------------------------------------------------------------------------
 
+ensure_docker() {
+  if command -v docker >/dev/null 2>&1; then
+    ok "docker found in PATH"
+    return 0
+  fi
+
+  detect_os_arch
+
+  if [ "$OS_NAME" = "macos" ]; then
+    echo ""
+    echo "  ⚠️  Docker was not found."
+    echo "  On macOS, install Docker Desktop (https://www.docker.com/products/docker-desktop/)"
+    echo "  or Colima (https://github.com/abiosoft/colima) and make sure 'docker' is in your PATH."
+    echo ""
+    err "Docker is required to run icbm."
+  fi
+
+  info "Docker not found; downloading static Docker CLI binary …"
+
+  # Map our architecture names to Docker's published archive names
+  DOCKER_ARCH="$ARCH_NAME"
+  case "$ARCH_NAME" in
+    x86_64) DOCKER_ARCH="x86_64" ;;
+    aarch64) DOCKER_ARCH="aarch64" ;;
+  esac
+
+  # Query Docker's API for the latest stable version tag
+  DOCKER_VERSION=$(curl -sSfL "https://download.docker.com/linux/static/stable/$DOCKER_ARCH/" |
+    grep -o 'href="[^"]*\.tgz"' |
+    grep -v 'rootless' |
+    sed 's/href="//;s/"$//' |
+    sort -V |
+    tail -1 |
+    sed 's/\.tgz//')
+
+  if [ -z "$DOCKER_VERSION" ]; then
+    err "Could not determine latest Docker CLI version for $DOCKER_ARCH."
+  fi
+
+  TGZ_URL="https://download.docker.com/linux/static/stable/$DOCKER_ARCH/${DOCKER_VERSION}.tgz"
+  TGZ_PATH="$BIN_DIR/docker.tgz"
+
+  curl -sSfL "$TGZ_URL" -o "$TGZ_PATH"
+
+  # Extract only the docker binary from the tarball
+  tar -xzf "$TGZ_PATH" -C "$BIN_DIR" --strip-components=1 "docker/docker"
+  rm -f "$TGZ_PATH"
+  chmod +x "$BIN_DIR/docker"
+
+  ok "Docker CLI downloaded to $BIN_DIR/docker"
+  echo ""
+  echo "  ℹ️  Make sure you have a Docker daemon running and that your user"
+  echo "     is in the 'docker' group (or the socket is otherwise accessible)."
+  echo ""
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+# 1. Download icbm binary
 download_binary
 
-# ---------------------------------------------------------------------------
-# 2. Check / install VM provider deps
-# ---------------------------------------------------------------------------
+# 2. Ensure Docker is available (downloads static binary on Linux if missing)
+ensure_docker
 
-OS="$(uname -s)"
-DEPS_MISSING=0
+# 3. Make sure our private bin directory is first on PATH so the downloaded
+#    docker binary is found even if the user didn't have one globally.
+export PATH="$BIN_DIR:$PATH"
 
-# Docker is the preferred provider on all platforms.
-# On Linux, libvirt tools serve as a fallback when Docker is unavailable.
-if [ "$OS" = "Darwin" ]; then
-  if ! command -v docker >/dev/null 2>&1; then
-    DEPS_MISSING=1
-  fi
-else
-  if ! command -v docker >/dev/null 2>&1; then
-    DEPS_MISSING=1
-  fi
-
-  # Also check libvirt fallback tools.
-  for tool in virsh virt-install qemu-img; do
-    command -v "$tool" >/dev/null 2>&1 || { LIBVIRT_MISSING=1; break; }
-  done
-fi
-
-if [ "$DEPS_MISSING" -eq 1 ]; then
-  install_deps_linux() {
-    if command -v apt-get >/dev/null 2>&1; then
-      sudo apt-get update
-      sudo apt-get install -y docker.io
-      # Also ensure libvirt fallback tools are present.
-      sudo apt-get install -y qemu-kvm libvirt-daemon-system virtinst
-    elif command -v dnf >/dev/null 2>&1; then
-      sudo dnf install -y docker
-      # Also ensure libvirt fallback tools are present.
-      sudo dnf install -y qemu-kvm libvirt virt-install
-    elif command -v nix-env >/dev/null 2>&1; then
-      nix-env -iA nixpkgs.docker
-      nix-env -iA nixpkgs.libvirt nixpkgs.virt-manager nixpkgs.qemu
-    else
-      err "Could not detect a supported package manager. Please install docker (and libvirt tools as fallback) manually."
-    fi
-  }
-
-  install_deps_macos() {
-    if ! command -v brew >/dev/null 2>&1; then
-      info "Homebrew not found – installing …"
-      NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-    fi
-
-    # colima + docker CLI: runs entirely in user-space (no sudo required).
-    # Docker Desktop (--cask docker) requires admin privileges and a system
-    # extension, so we avoid it here.
-    brew install colima docker
-
-    # Start a colima VM with sensible defaults (2 vCPUs, 4 GB RAM, 60 GB disk).
-    # These are intentionally modest so the benchmark runs on most Apple Silicon
-    # machines; adjust with `colima stop && colima start --cpu N --memory N` if needed.
-    colima start --cpu 2 --memory 4 --disk 60 || \
-      err "colima failed to start. Ensure virtualization is supported and re-run, or start it manually with: colima start"
-  }
-
-  if [ "$AUTO_DEPS" -eq 1 ]; then
-    INSTALL_DEPS=y
-  else
-    echo ""
-    if [ "$OS" = "Darwin" ]; then
-      echo "  ⚠️  Docker was not found."
-      echo "  macOS (Apple Silicon):  brew install colima docker && colima start"
-    else
-      echo "  ⚠️  Docker was not found."
-      echo "  Debian/Ubuntu:     sudo apt install docker.io"
-      echo "  Fedora/RHEL:       sudo dnf install docker"
-      echo ""
-      echo "  libvirt fallback tools will also be installed in case you prefer --provider libvirt."
-    fi
-    echo ""
-    printf "  Install dependencies now? [Y/n] "
-    read -r INSTALL_DEPS </dev/tty
-    INSTALL_DEPS="${INSTALL_DEPS:-y}"
-  fi
-
-  case "$INSTALL_DEPS" in
-    [Yy]*)
-      info "Installing dependencies …"
-      if [ "$OS" = "Darwin" ]; then
-        install_deps_macos
-      else
-        install_deps_linux
-      fi
-      ok "Dependencies installed"
-      ;;
-    *)
-      echo "  Skipping dependency installation. Re-run after installing the required tools."
-      exit 1
-      ;;
-  esac
-fi
-
-if command -v docker >/dev/null 2>&1; then
-  ok "docker found"
-else
-  ok "libvirt fallback tools found"
-fi
-
-# ---------------------------------------------------------------------------
-# 3. Run the benchmark
-# ---------------------------------------------------------------------------
-
+# 4. Run the benchmark
 info "Launching benchmark …"
-"$ICBM_BIN" run --provider "$RUN_PROVIDER" "$@"
+"$BIN_DIR/icbm" run --provider "$RUN_PROVIDER" "$@"
