@@ -671,6 +671,10 @@ fn ssh_banner_visible(host: &str, port: u16) -> bool {
         return false;
     };
 
+    // Without a read timeout this can block forever if QEMU forwards the
+    // connection but the guest drops/hangs the packet.
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+
     let mut buf = [0u8; 8];
     let Ok(n) = stream.read(&mut buf) else {
         return false;
