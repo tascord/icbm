@@ -10,13 +10,7 @@
 use anyhow::{bail, Context, Result};
 use colored::Colorize;
 use std::{
-    env,
-    fmt,
-    io::Read,
-    net::{IpAddr, TcpStream, ToSocketAddrs},
-    path::PathBuf,
-    process::Command,
-    str::FromStr,
+    env, fmt, net::{IpAddr, TcpStream}, path::PathBuf, process::Command, str::FromStr,
     time::{Duration, Instant},
 };
 use tokio::time::sleep;
@@ -504,7 +498,7 @@ impl Domain {
             } else {
                 self.query_ip()?
             } {
-                if tcp_connectable(&ip, self.ssh_port) && ssh_banner_visible(&ip, self.ssh_port) {
+                if tcp_connectable(&ip, self.ssh_port) {
                     return Ok(ip);
                 }
             }
@@ -653,34 +647,6 @@ fn tcp_connectable(host: &str, port: u16) -> bool {
         }
     }
     false
-}
-
-/// Probes whether an SSH server on `host:port` is sending a banner.
-///
-/// Unlike `tcp_connectable`, this actually reads the first bytes from the
-/// server to make sure sshd is fully initialised and responsive, not just
-/// that the port is open.
-fn ssh_banner_visible(host: &str, port: u16) -> bool {
-    let addr = format!("{}:{}", host, port);
-    let Ok(mut stream) = TcpStream::connect_timeout(
-        &addr.parse::<std::net::SocketAddr>().unwrap_or_else(|_| {
-            (host, port).to_socket_addrs().unwrap().next().unwrap()
-        }),
-        Duration::from_secs(3),
-    ) else {
-        return false;
-    };
-
-    // Without a read timeout this can block forever if QEMU forwards the
-    // connection but the guest drops/hangs the packet.
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-
-    let mut buf = [0u8; 8];
-    let Ok(n) = stream.read(&mut buf) else {
-        return false;
-    };
-
-    n >= 4 && &buf[..4] == b"SSH-"
 }
 
 #[cfg(test)]
