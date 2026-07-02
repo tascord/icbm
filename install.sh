@@ -182,7 +182,11 @@ if [ "$DEPS_MISSING" -eq 1 ]; then
       BREW_PREFIX="$HOME/.homebrew"
       mkdir -p "$BREW_PREFIX"
       curl -fsSL https://github.com/Homebrew/brew/tarball/master \
-        | tar xz --strip-components 1 -C "$BREW_PREFIX"
+        | tar xz --strip-components 1 -C "$BREW_PREFIX" \
+        || err "Failed to download or extract Homebrew. Check your connection and try again."
+      # Verify the binary exists before sourcing the environment.
+      [ -x "$BREW_PREFIX/bin/brew" ] \
+        || err "Homebrew installation incomplete – $BREW_PREFIX/bin/brew not found."
       # Make brew available in the current shell session.
       eval "$("$BREW_PREFIX/bin/brew" shellenv)"
     fi
