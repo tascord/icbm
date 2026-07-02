@@ -168,10 +168,19 @@ if [ "$DEPS_MISSING" -eq 1 ]; then
   install_deps_macos() {
     if ! command -v brew >/dev/null 2>&1; then
       info "Homebrew not found – installing …"
-      /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+      NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
     fi
 
-    brew install --cask docker
+    # colima + docker CLI: runs entirely in user-space (no sudo required).
+    # Docker Desktop (--cask docker) requires admin privileges and a system
+    # extension, so we avoid it here.
+    brew install colima docker
+
+    # Start a colima VM with sensible defaults (2 vCPUs, 4 GB RAM, 60 GB disk).
+    # These are intentionally modest so the benchmark runs on most Apple Silicon
+    # machines; adjust with `colima stop && colima start --cpu N --memory N` if needed.
+    colima start --cpu 2 --memory 4 --disk 60 || \
+      err "colima failed to start. Ensure virtualization is supported and re-run, or start it manually with: colima start"
   }
 
   if [ "$AUTO_DEPS" -eq 1 ]; then
@@ -180,7 +189,7 @@ if [ "$DEPS_MISSING" -eq 1 ]; then
     echo ""
     if [ "$OS" = "Darwin" ]; then
       echo "  ⚠️  Docker was not found."
-      echo "  macOS (Apple Silicon):  brew install --cask docker"
+      echo "  macOS (Apple Silicon):  brew install colima docker && colima start"
     else
       echo "  ⚠️  Docker was not found."
       echo "  Debian/Ubuntu:     sudo apt install docker.io"
