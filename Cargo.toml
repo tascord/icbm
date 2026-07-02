@@ -33,6 +33,7 @@ chrono = { version = "0.4", features = ["serde"] }
 # Terminal colours and progress bars
 colored = "2"
 indicatif = { version = "0.17", features = ["tokio"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
 # SSH client (to talk to VMs)
 ssh2 = "0.9"
