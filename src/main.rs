@@ -36,7 +36,7 @@ enum Commands {
         #[arg(long, default_value = "ubuntu")]
         flavours: String,
 
-        /// VM provider: auto, libvirt, utm, docker
+        /// VM provider: auto, libvirt, docker
         #[arg(long, default_value = "auto")]
         provider: String,
 

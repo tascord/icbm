@@ -1,11 +1,11 @@
-//! VM provisioning via `virsh` / libvirt or UTM.
+//! VM provisioning via libvirt or Docker.
 //!
 //! This module handles:
 //! * Downloading base cloud images (Ubuntu 24.04 LTS, NixOS 24.05).
-//! * Creating a thin-clone overlay disk.
-//! * Defining and starting the virsh domain.
-//! * Waiting until SSH is reachable.
-//! * Tearing down the domain and removing its disk image.
+//! * Creating a thin-clone overlay disk (libvirt) or pulling a Docker image.
+//! * Starting the virsh domain or Docker container.
+//! * Waiting until SSH (libvirt) or the container (Docker) is reachable.
+//! * Tearing down the VM/container.
 
 use anyhow::{bail, Context, Result};
 use colored::Colorize;
@@ -32,7 +32,6 @@ pub enum Flavour {
 pub enum Provider {
     Auto,
     Libvirt,
-    Utm,
     Docker,
 }
 
@@ -41,7 +40,6 @@ impl fmt::Display for Provider {
         match self {
             Provider::Auto => write!(f, "auto"),
             Provider::Libvirt => write!(f, "libvirt"),
-            Provider::Utm => write!(f, "utm"),
             Provider::Docker => write!(f, "docker"),
         }
     }
@@ -53,9 +51,8 @@ impl FromStr for Provider {
         match s.to_lowercase().as_str() {
             "auto" => Ok(Provider::Auto),
             "libvirt" => Ok(Provider::Libvirt),
-            "utm" => Ok(Provider::Utm),
             "docker" => Ok(Provider::Docker),
-            other => bail!("Unknown provider '{}'. Use: auto, libvirt, utm, docker", other),
+            other => bail!("Unknown provider '{}'. Use: auto, libvirt, docker", other),
         }
     }
 }
@@ -74,8 +71,6 @@ impl Provider {
             Provider::Auto => {
                 if docker_available() {
                     Provider::Docker
-                } else if cfg!(target_os = "macos") {
-                    Provider::Utm
                 } else {
                     Provider::Libvirt
                 }
@@ -183,10 +178,6 @@ impl Domain {
     pub fn new(flavour: Flavour, provider: Provider) -> Self {
         let resolved = provider.resolve();
         let name = match resolved {
-            Provider::Utm => match flavour {
-                Flavour::Ubuntu => env::var("ICBM_UTM_UBUNTU_VM").unwrap_or_else(|_| "icbm-ubuntu".to_string()),
-                Flavour::NixOs => env::var("ICBM_UTM_NIXOS_VM").unwrap_or_else(|_| "icbm-nixos".to_string()),
-            },
             Provider::Docker => match flavour {
                 Flavour::Ubuntu => "icbm-ubuntu".to_string(),
                 Flavour::NixOs => "icbm-nixos".to_string(),
@@ -197,17 +188,7 @@ impl Domain {
             }
         };
 
-        let ssh_port = match (resolved.clone(), &flavour) {
-            (Provider::Utm, Flavour::Ubuntu) => env::var("ICBM_UTM_UBUNTU_SSH_PORT")
-                .ok()
-                .and_then(|v| v.parse::<u16>().ok())
-                .unwrap_or(2222),
-            (Provider::Utm, Flavour::NixOs) => env::var("ICBM_UTM_NIXOS_SSH_PORT")
-                .ok()
-                .and_then(|v| v.parse::<u16>().ok())
-                .unwrap_or(2223),
-            _ => 22,
-        };
+        let ssh_port = 22;
 
         let disk = vms_dir().join(format!("{}.qcow2", name));
         Domain {
@@ -228,7 +209,6 @@ impl Domain {
     /// cloud-init so the benchmark runner can connect.
     pub async fn provision(&self) -> Result<()> {
         match self.provider {
-            Provider::Utm => self.provision_utm().await,
             Provider::Docker => self.provision_docker().await,
             Provider::Libvirt => self.provision_libvirt().await,
             Provider::Auto => unreachable!(),
@@ -324,51 +304,6 @@ impl Domain {
         run_cmd("virt-install", &args_ref)?;
 
         println!("  {} domain '{}' started", "✓".green(), self.name.cyan());
-        Ok(())
-    }
-
-    async fn provision_utm(&self) -> Result<()> {
-        println!("  {} UTM VM '{}'", "Provisioning".bold(), self.name.cyan());
-
-        if !cfg!(target_os = "macos") {
-            bail!("UTM provisioning is only supported on macOS hosts");
-        }
-
-        std::fs::create_dir_all(images_dir())?;
-        std::fs::create_dir_all(vms_dir())?;
-
-        let info = image_info(&self.flavour);
-        let base = self.ensure_base_image(info.url).await?;
-        let seed = self.create_cloud_init_seed(info.user).await?;
-
-        let mgr = utmvm::UtmManager::new();
-
-        if !mgr.exists(&self.name).await? {
-            let config = utmvm::VmConfig::builder(&self.name)
-                .architecture(if std::env::consts::ARCH == "aarch64" {
-                    utmvm::Architecture::Aarch64
-                } else {
-                    utmvm::Architecture::X86_64
-                })
-                .memory_mb(4096)
-                .cpu_count(2)
-                .hypervisor(true)
-                .drive(utmvm::DriveConfig::disk_image(&base))
-                .drive(utmvm::DriveConfig::cdrom(&seed))
-                .network_mode(utmvm::NetworkMode::Emulated)
-                .port_forward(utmvm::PortForward {
-                    protocol: "TCP".to_string(),
-                    host_port: self.ssh_port,
-                    guest_port: 22,
-                })
-                .build();
-
-            mgr.create(&config).await?;
-        }
-
-        println!("  {} UTM VM '{}'", "Starting".bold(), self.name.cyan());
-        mgr.start(&self.name).await?;
-        println!("  {} UTM VM '{}' started", "✓".green(), self.name.cyan());
         Ok(())
     }
 
@@ -574,12 +509,7 @@ impl Domain {
                 bail!("Timed out waiting for VM '{}' to become reachable", self.name);
             }
 
-            if let Some(ip) = if matches!(self.provider, Provider::Utm) {
-                self.query_ip_utm()
-                    .or_else(|| Some("127.0.0.1".to_string()))
-            } else {
-                self.query_ip()?
-            } {
+            if let Some(ip) = self.query_ip()? {
                 if tcp_connectable(&ip, self.ssh_port) {
                     return Ok(ip);
                 }
@@ -587,33 +517,6 @@ impl Domain {
 
             sleep(Duration::from_secs(5)).await;
         }
-    }
-
-    fn query_ip_utm(&self) -> Option<String> {
-        // For UTM, we use port forwarding (localhost:<host_port> -> guest:22), so we don't strictly
-        // need the guest IP. The utmctl ip-address command requires QEMU guest agent to be running.
-        // We try it briefly, but don't wait long — if it fails, we just use 127.0.0.1.
-        let output = match Command::new("utmctl")
-            .args(["ip-address", &self.name])
-            .output()
-        {
-            Ok(o) => o,
-            Err(_) => return None,
-        };
-
-        if !output.status.success() {
-            return None;
-        }
-
-        let text = String::from_utf8_lossy(&output.stdout);
-        for line in text.lines() {
-            let ip = line.trim();
-            if ip.parse::<IpAddr>().is_ok() {
-                return Some(ip.to_string());
-            }
-        }
-
-        None
     }
 
     fn query_ip(&self) -> Result<Option<String>> {
@@ -657,12 +560,6 @@ impl Domain {
                     .args(["rm", "-f", &self.name])
                     .output();
                 println!("  {} container '{}' removed", "✓".green(), self.name.cyan());
-                return Ok(());
-            }
-            Provider::Utm => {
-                let mgr = utmvm::UtmManager::new();
-                let _ = mgr.stop(&self.name).await;
-                println!("  {} UTM VM '{}' stopped", "✓".green(), self.name.cyan());
                 return Ok(());
             }
             Provider::Libvirt => {
@@ -818,16 +715,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_domain_ssh_port_ubuntu() {
-        let d = Domain::new(Flavour::Ubuntu, Provider::Utm);
-        assert_eq!(d.ssh_port(), 2222);
+    fn test_domain_docker_ubuntu() {
+        let d = Domain::new(Flavour::Ubuntu, Provider::Docker);
+        assert_eq!(d.ssh_port(), 22);
         assert_eq!(d.ssh_user(), "ubuntu");
     }
 
     #[test]
-    fn test_domain_ssh_port_nixos() {
-        let d = Domain::new(Flavour::NixOs, Provider::Utm);
-        assert_eq!(d.ssh_port(), 2223);
+    fn test_domain_docker_nixos() {
+        let d = Domain::new(Flavour::NixOs, Provider::Docker);
+        assert_eq!(d.ssh_port(), 22);
         assert_eq!(d.ssh_user(), "root");
     }
 
@@ -835,40 +732,5 @@ mod tests {
     fn test_domain_libvirt_different_ports() {
         let d = Domain::new(Flavour::Ubuntu, Provider::Libvirt);
         assert_eq!(d.ssh_port(), 22);
-    }
-
-    // -----------------------------------------------------------------------
-    // Conditional integration test — only runs when ./test.iso is present.
-    // -----------------------------------------------------------------------
-
-    #[tokio::test]
-    async fn test_provision_utm_with_test_iso() {
-        if !std::path::Path::new("./test.iso").exists() {
-            eprintln!("Skipping integration test: ./test.iso not found");
-            return;
-        }
-
-        // This test is gated behind the ./test.iso file so it doesn't run
-        // automatically in CI or on machines without a test image.
-        //
-        // To use it:
-        //   1. Place a small bootable ISO named `test.iso` in the icbm root.
-        //   2. Ensure UTM is installed and running.
-        //   3. Run `cargo test -- test_provision_utm_with_test_iso`
-        //
-        // The test will create a VM named `icbm-ubuntu`, start it, and wait
-        // for SSH to become reachable on localhost:2222.
-        let domain = Domain::new(Flavour::Ubuntu, Provider::Utm);
-
-        // Provision (downloads base image unless already cached).
-        domain.provision_utm().await.expect("UTM provisioning failed");
-
-        // Wait for SSH to come up on the forwarded port.
-        let ip = domain.wait_for_ip().await.expect("Timed out waiting for IP");
-        assert!(tcp_connectable(&ip, domain.ssh_port()));
-
-        // Stop without deleting (caller can inspect the VM manually).
-        let mgr = utmvm::UtmManager::new();
-        let _ = mgr.stop(&domain.name).await;
     }
 }

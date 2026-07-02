@@ -36,6 +36,3 @@ indicatif = { version = "0.17", features = ["tokio"] }
 
 # SSH client (to talk to VMs)
 ssh2 = "0.9"
-
-# UTM VM management (local)
-utmvm = { path = "../utmvm" }

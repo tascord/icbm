@@ -10,7 +10,7 @@
 #   --install-deps   Automatically install missing system dependencies without prompting.
 #
 # The script will:
-#   1. Optionally install system dependencies (libvirt/qemu on Linux, UTM on macOS).
+#   1. Optionally install Docker (preferred) or libvirt/qemu (Linux fallback).
 #   2. Download the latest icbm binary from GitHub releases.
 #   3. Run the benchmark.
 
@@ -78,37 +78,41 @@ detect_os_arch() {
       err "Unsupported architecture: $ARCH"
       ;;
   esac
+
+  if [ "$OS_NAME" = "macos" ] && [ "$ARCH_NAME" = "x86_64" ]; then
+    err "macOS Intel (x86_64) is not supported. Only Apple Silicon (aarch64) is supported."
+  fi
 }
 
 download_binary() {
   detect_os_arch
-  
+
   info "Detecting latest release …"
-  
+
   # Get the latest release info from the GitHub API
   RELEASE_JSON=$(curl -sSfL "https://api.github.com/repos/tascord/icbm/releases/latest")
-  
+
   # Extract download URL for the current platform
   ASSET_NAME="icbm-$OS_NAME-$ARCH_NAME"
   DOWNLOAD_URL=$(echo "$RELEASE_JSON" | grep -o "\"browser_download_url\": \"[^\"]*$ASSET_NAME\"" | head -1 | cut -d'"' -f4)
-  
+
   if [ -z "$DOWNLOAD_URL" ]; then
     err "Could not find a release binary for $OS_NAME-$ARCH_NAME. Check available releases at $REPO/releases"
   fi
-  
+
   mkdir -p "$BIN_DIR"
   ICBM_BIN="$BIN_DIR/icbm"
-  
+
   if [ -f "$ICBM_BIN" ]; then
     # Check if we already have the latest version
     info "Downloading latest icbm binary …"
   else
     info "Downloading icbm binary …"
   fi
-  
+
   curl -sSfL "$DOWNLOAD_URL" -o "$ICBM_BIN"
   chmod +x "$ICBM_BIN"
-  
+
   ok "Binary ready at $ICBM_BIN"
 }
 
@@ -125,15 +129,20 @@ download_binary
 OS="$(uname -s)"
 DEPS_MISSING=0
 
+# Docker is the preferred provider on all platforms.
+# On Linux, libvirt tools serve as a fallback when Docker is unavailable.
 if [ "$OS" = "Darwin" ]; then
-  RUN_PROVIDER="utm"
-  if ! command -v utmctl >/dev/null 2>&1; then
+  if ! command -v docker >/dev/null 2>&1; then
     DEPS_MISSING=1
   fi
 else
-  RUN_PROVIDER="libvirt"
+  if ! command -v docker >/dev/null 2>&1; then
+    DEPS_MISSING=1
+  fi
+
+  # Also check libvirt fallback tools.
   for tool in virsh virt-install qemu-img; do
-    command -v "$tool" >/dev/null 2>&1 || { DEPS_MISSING=1; break; }
+    command -v "$tool" >/dev/null 2>&1 || { LIBVIRT_MISSING=1; break; }
   done
 fi
 
@@ -141,13 +150,18 @@ if [ "$DEPS_MISSING" -eq 1 ]; then
   install_deps_linux() {
     if command -v apt-get >/dev/null 2>&1; then
       sudo apt-get update
+      sudo apt-get install -y docker.io
+      # Also ensure libvirt fallback tools are present.
       sudo apt-get install -y qemu-kvm libvirt-daemon-system virtinst
     elif command -v dnf >/dev/null 2>&1; then
+      sudo dnf install -y docker
+      # Also ensure libvirt fallback tools are present.
       sudo dnf install -y qemu-kvm libvirt virt-install
     elif command -v nix-env >/dev/null 2>&1; then
+      nix-env -iA nixpkgs.docker
       nix-env -iA nixpkgs.libvirt nixpkgs.virt-manager nixpkgs.qemu
     else
-      err "Could not detect a supported package manager. Please install qemu-kvm, libvirt and virt-install manually."
+      err "Could not detect a supported package manager. Please install docker (and libvirt tools as fallback) manually."
     fi
   }
 
@@ -157,13 +171,7 @@ if [ "$DEPS_MISSING" -eq 1 ]; then
       /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
     fi
 
-    brew install --cask utm
-
-    if [ -x /Applications/UTM.app/Contents/MacOS/utmctl ]; then
-      BREW_BIN="$(brew --prefix)/bin"
-      mkdir -p "$BREW_BIN"
-      ln -sf /Applications/UTM.app/Contents/MacOS/utmctl "$BREW_BIN/utmctl"
-    fi
+    brew install --cask docker
   }
 
   if [ "$AUTO_DEPS" -eq 1 ]; then
@@ -171,14 +179,14 @@ if [ "$DEPS_MISSING" -eq 1 ]; then
   else
     echo ""
     if [ "$OS" = "Darwin" ]; then
-      echo "  ⚠️  Required tool 'utmctl' was not found."
-      echo "  macOS:             brew install --cask utm"
-      echo "  then symlink:      ln -sf /Applications/UTM.app/Contents/MacOS/utmctl /usr/local/bin/utmctl"
+      echo "  ⚠️  Docker was not found."
+      echo "  macOS (Apple Silicon):  brew install --cask docker"
     else
-      echo "  ⚠️  One or more required tools (virsh, virt-install, qemu-img) were not found."
-      echo "  Debian/Ubuntu:     sudo apt install qemu-kvm libvirt-daemon-system virtinst"
-      echo "  Fedora/RHEL:       sudo dnf install qemu-kvm libvirt virt-install"
-      echo "  NixOS:             nix-env -iA nixpkgs.libvirt nixpkgs.virt-manager nixpkgs.qemu"
+      echo "  ⚠️  Docker was not found."
+      echo "  Debian/Ubuntu:     sudo apt install docker.io"
+      echo "  Fedora/RHEL:       sudo dnf install docker"
+      echo ""
+      echo "  libvirt fallback tools will also be installed in case you prefer --provider libvirt."
     fi
     echo ""
     printf "  Install dependencies now? [Y/n] "
@@ -203,10 +211,10 @@ if [ "$DEPS_MISSING" -eq 1 ]; then
   esac
 fi
 
-if [ "$RUN_PROVIDER" = "utm" ]; then
-  ok "utmctl found"
+if command -v docker >/dev/null 2>&1; then
+  ok "docker found"
 else
-  ok "libvirt/virsh found"
+  ok "libvirt fallback tools found"
 fi
 
 # ---------------------------------------------------------------------------
