@@ -36,7 +36,7 @@ enum Commands {
         #[arg(long, default_value = "ubuntu")]
         flavours: String,
 
-        /// VM provider: auto, libvirt, utm
+        /// VM provider: auto, libvirt, utm, docker
         #[arg(long, default_value = "auto")]
         provider: String,
 
@@ -109,13 +109,12 @@ async fn run_benchmark(
             domain.provision().await?;
         }
 
-        let ip = domain.wait_for_ip().await?;
-        println!("   VM IP: {}", ip.green());
+        let _ = domain.wait_for_ip().await?;
 
         // ------------------------------------------------------------------
-        // 2. Run benchmark steps inside the VM, collecting metrics
+        // 2. Run benchmark steps inside the VM/container, collecting metrics
         // ------------------------------------------------------------------
-        let result = bench::run(&domain, &ip).await?;
+        let result = bench::run(&domain).await?;
 
         // ------------------------------------------------------------------
         // 3. Teardown (unless --keep-vms)

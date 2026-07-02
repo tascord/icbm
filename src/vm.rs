@@ -33,6 +33,7 @@ pub enum Provider {
     Auto,
     Libvirt,
     Utm,
+    Docker,
 }
 
 impl fmt::Display for Provider {
@@ -41,6 +42,7 @@ impl fmt::Display for Provider {
             Provider::Auto => write!(f, "auto"),
             Provider::Libvirt => write!(f, "libvirt"),
             Provider::Utm => write!(f, "utm"),
+            Provider::Docker => write!(f, "docker"),
         }
     }
 }
@@ -52,16 +54,27 @@ impl FromStr for Provider {
             "auto" => Ok(Provider::Auto),
             "libvirt" => Ok(Provider::Libvirt),
             "utm" => Ok(Provider::Utm),
-            other => bail!("Unknown provider '{}'. Use: auto, libvirt, utm", other),
+            "docker" => Ok(Provider::Docker),
+            other => bail!("Unknown provider '{}'. Use: auto, libvirt, utm, docker", other),
         }
     }
+}
+
+fn docker_available() -> bool {
+    Command::new("docker")
+        .args(["info"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 impl Provider {
     pub fn resolve(&self) -> Self {
         match self {
             Provider::Auto => {
-                if cfg!(target_os = "macos") {
+                if docker_available() {
+                    Provider::Docker
+                } else if cfg!(target_os = "macos") {
                     Provider::Utm
                 } else {
                     Provider::Libvirt
@@ -111,9 +124,9 @@ fn image_info(flavour: &Flavour) -> ImageInfo {
     match flavour {
         Flavour::Ubuntu => ImageInfo {
             url: if arch == "aarch64" {
-                "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img"
+                "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-arm64.img"
             } else {
-                "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
+                "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
             },
             sha256: "", // checksums change; verify manually in prod
             user: "ubuntu",
@@ -174,6 +187,10 @@ impl Domain {
                 Flavour::Ubuntu => env::var("ICBM_UTM_UBUNTU_VM").unwrap_or_else(|_| "icbm-ubuntu".to_string()),
                 Flavour::NixOs => env::var("ICBM_UTM_NIXOS_VM").unwrap_or_else(|_| "icbm-nixos".to_string()),
             },
+            Provider::Docker => match flavour {
+                Flavour::Ubuntu => "icbm-ubuntu".to_string(),
+                Flavour::NixOs => "icbm-nixos".to_string(),
+            },
             _ => {
                 let ts = chrono::Utc::now().timestamp();
                 format!("icbm-{}-{}", flavour, ts)
@@ -210,10 +227,15 @@ impl Domain {
     /// and starts the virsh domain, then injects an SSH public key via
     /// cloud-init so the benchmark runner can connect.
     pub async fn provision(&self) -> Result<()> {
-        if matches!(self.provider, Provider::Utm) {
-            return self.provision_utm().await;
+        match self.provider {
+            Provider::Utm => self.provision_utm().await,
+            Provider::Docker => self.provision_docker().await,
+            Provider::Libvirt => self.provision_libvirt().await,
+            Provider::Auto => unreachable!(),
         }
+    }
 
+    async fn provision_libvirt(&self) -> Result<()> {
         println!("  {} VM '{}'", "Provisioning".bold(), self.name.cyan());
 
         // Prerequisites
@@ -350,6 +372,46 @@ impl Domain {
         Ok(())
     }
 
+    async fn provision_docker(&self) -> Result<()> {
+        println!("  {} Docker container '{}'", "Provisioning".bold(), self.name.cyan());
+
+        check_tool("docker")?;
+
+        let image = self.docker_image();
+        run_cmd("docker", &["pull", &image])?;
+
+        // Remove existing container (if any) to ensure a clean state
+        let _ = Command::new("docker")
+            .args(["rm", "-f", &self.name])
+            .output();
+
+        run_cmd(
+            "docker",
+            &["run", "-d", "--name", &self.name, &image, "sleep", "infinity"],
+        )?;
+
+        // Install base packages so the benchmark steps don't have to
+        println!("  {} base packages inside container…", "Installing".dimmed());
+        run_cmd(
+            "docker",
+            &[
+                "exec", &self.name,
+                "sh", "-c",
+                "apt-get update -qq && apt-get install -y -qq curl git build-essential pkg-config libssl-dev unzip 2>&1",
+            ],
+        )?;
+
+        println!("  {} container '{}' ready", "✓".green(), self.name.cyan());
+        Ok(())
+    }
+
+    fn docker_image(&self) -> String {
+        match self.flavour {
+            Flavour::Ubuntu => "ubuntu:22.04".to_string(),
+            Flavour::NixOs => "nixos/nix:latest".to_string(),
+        }
+    }
+
     fn os_variant(&self) -> &'static str {
         match self.flavour {
             Flavour::Ubuntu => "ubuntu24.04",
@@ -484,6 +546,26 @@ impl Domain {
     /// Polls provider-specific APIs until the domain reports an address, then
     /// waits until the configured SSH port is open.
     pub async fn wait_for_ip(&self) -> Result<String> {
+        if matches!(self.provider, Provider::Docker) {
+            println!("  {} container '{}' …", "Waiting for".dimmed(), self.name);
+            let deadline = Instant::now() + Duration::from_secs(60);
+            loop {
+                if Instant::now() > deadline {
+                    bail!("Timed out waiting for container '{}'", self.name);
+                }
+                let output = Command::new("docker")
+                    .args(["inspect", "-f", "{{.State.Status}}", &self.name])
+                    .output();
+                if let Ok(o) = output {
+                    let status = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    if status == "running" {
+                        return Ok("docker".to_string());
+                    }
+                }
+                sleep(Duration::from_secs(1)).await;
+            }
+        }
+
         println!("  {} IP and SSH …", "Waiting for".dimmed());
         let deadline = Instant::now() + Duration::from_secs(300);
 
@@ -569,20 +651,31 @@ impl Domain {
 
     /// Destroys the domain and removes its disk / seed images.
     pub async fn destroy(&self) -> Result<()> {
-        if matches!(self.provider, Provider::Utm) {
-            let mgr = utmvm::UtmManager::new();
-            let _ = mgr.stop(&self.name).await;
-            println!("  {} UTM VM '{}' stopped", "✓".green(), self.name.cyan());
-            return Ok(());
+        match self.provider {
+            Provider::Docker => {
+                let _ = Command::new("docker")
+                    .args(["rm", "-f", &self.name])
+                    .output();
+                println!("  {} container '{}' removed", "✓".green(), self.name.cyan());
+                return Ok(());
+            }
+            Provider::Utm => {
+                let mgr = utmvm::UtmManager::new();
+                let _ = mgr.stop(&self.name).await;
+                println!("  {} UTM VM '{}' stopped", "✓".green(), self.name.cyan());
+                return Ok(());
+            }
+            Provider::Libvirt => {
+                let _ = run_cmd("virsh", &["destroy", &self.name]);
+                let _ = run_cmd("virsh", &["undefine", &self.name, "--remove-all-storage"]);
+                if self.disk.exists() {
+                    std::fs::remove_file(&self.disk)?;
+                }
+                println!("  {} VM '{}' removed", "✓".green(), self.name.cyan());
+                Ok(())
+            }
+            Provider::Auto => Ok(()),
         }
-
-        let _ = run_cmd("virsh", &["destroy", &self.name]);
-        let _ = run_cmd("virsh", &["undefine", &self.name, "--remove-all-storage"]);
-        if self.disk.exists() {
-            std::fs::remove_file(&self.disk)?;
-        }
-        println!("  {} VM '{}' removed", "✓".green(), self.name.cyan());
-        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -602,8 +695,79 @@ impl Domain {
     }
 
     /// Returns the host-side SSH port for this domain.
+    #[allow(dead_code)]
     pub fn ssh_port(&self) -> u16 {
         self.ssh_port
+    }
+
+    // -----------------------------------------------------------------------
+    // Exec (abstracts over SSH or docker exec)
+    // -----------------------------------------------------------------------
+
+    /// Execute a command inside the guest/container and return its exit code
+    /// and combined stdout/stderr as a string.
+    pub fn exec(&self, cmd: &str) -> Result<(i32, String)> {
+        if matches!(self.provider, Provider::Docker) {
+            self.exec_docker(cmd)
+        } else {
+            self.exec_ssh(cmd)
+        }
+    }
+
+    fn exec_docker(&self, cmd: &str) -> Result<(i32, String)> {
+        let output = Command::new("docker")
+            .args(["exec", &self.name, "sh", "-c", cmd])
+            .output()
+            .with_context(|| format!("docker exec '{}' failed", self.name))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let combined = format!("{}{}", stdout, stderr);
+
+        let exit_code = output.status.code().unwrap_or(-1);
+
+        let tail = if combined.len() > 4096 {
+            combined[combined.len() - 4096..].to_string()
+        } else {
+            combined
+        };
+
+        Ok((exit_code, tail))
+    }
+
+    fn exec_ssh(&self, cmd: &str) -> Result<(i32, String)> {
+        use ssh2::Session;
+        use std::io::Read;
+        use std::net::TcpStream;
+
+        let addr = format!("127.0.0.1:{}", self.ssh_port);
+        let tcp = TcpStream::connect(&addr)
+            .with_context(|| format!("SSH: failed to connect to {}", addr))?;
+        let mut sess = Session::new().context("SSH: failed to create session")?;
+        sess.set_tcp_stream(tcp);
+        sess.handshake().context("SSH: handshake failed")?;
+        sess.userauth_pubkey_file(self.ssh_user(), None, &self.ssh_key_path(), None)
+            .context("SSH: public-key auth failed")?;
+
+        if !sess.authenticated() {
+            bail!("SSH: authentication failed for {}", self.ssh_user());
+        }
+
+        let mut channel = sess.channel_session().context("SSH: channel open failed")?;
+        channel.exec(cmd).context("SSH: exec failed")?;
+
+        let mut output = String::new();
+        channel.read_to_string(&mut output)?;
+        channel.wait_close()?;
+        let exit_code = channel.exit_status()?;
+
+        let tail = if output.len() > 4096 {
+            output[output.len() - 4096..].to_string()
+        } else {
+            output
+        };
+
+        Ok((exit_code, tail))
     }
 }
 

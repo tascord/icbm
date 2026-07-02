@@ -1,6 +1,6 @@
 //! Benchmark runner.
 //!
-//! Connects to a VM over SSH and performs the following steps in order:
+//! Connects to a VM/container and performs the following steps in order:
 //!
 //! 1. Install Rust (via rustup).
 //! 2. Sparse-clone this repository to obtain the `workspace/` example.
@@ -11,16 +11,9 @@
 //! Each step is timed and its host-side CPU / memory usage is tracked with
 //! [`crate::metrics::Sampler`].
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
-use ssh2::Session;
-use std::{
-    io::Read,
-    net::TcpStream,
-    path::Path,
-    time::Duration,
-};
 
 use crate::{
     metrics::{Sampler, StepMetrics},
@@ -87,11 +80,9 @@ const WORKSPACE_PATH: &str = "icbm/workspace";
 // Entry point
 // ---------------------------------------------------------------------------
 
-/// Connects to `ip` via SSH (using the key stored by `domain`), then runs all
+/// Connects to the VM/container via the domain's `exec` method and runs all
 /// benchmark steps, returning their combined results.
-pub async fn run(domain: &Domain, ip: &str) -> Result<BenchResult> {
-    let sess = ssh_connect(ip, domain.ssh_port(), domain.ssh_user(), &domain.ssh_key_path()).await?;
-
+pub async fn run(domain: &Domain) -> Result<BenchResult> {
     let mut steps = vec![];
 
     // -----------------------------------------------------------------------
@@ -99,7 +90,7 @@ pub async fn run(domain: &Domain, ip: &str) -> Result<BenchResult> {
     // -----------------------------------------------------------------------
     steps.push(
         run_step(
-            &sess,
+            domain,
             StepName::InstallRust,
             // Use rustup in non-interactive mode; export PATH so subsequent
             // commands can find cargo without a new login shell.
@@ -119,7 +110,7 @@ pub async fn run(domain: &Domain, ip: &str) -> Result<BenchResult> {
     // -----------------------------------------------------------------------
     steps.push(
         run_step(
-            &sess,
+            domain,
             StepName::CloneWorkspace,
             &format!(
                 "git clone --filter=blob:none --sparse {REPO_URL} icbm 2>&1 \
@@ -139,7 +130,7 @@ pub async fn run(domain: &Domain, ip: &str) -> Result<BenchResult> {
     // -----------------------------------------------------------------------
     steps.push(
         run_step(
-            &sess,
+            domain,
             StepName::ClippyFix,
             &format!(
                 ". $HOME/.cargo/env \
@@ -155,7 +146,7 @@ pub async fn run(domain: &Domain, ip: &str) -> Result<BenchResult> {
     // -----------------------------------------------------------------------
     steps.push(
         run_step(
-            &sess,
+            domain,
             StepName::BuildDev,
             &format!(
                 ". $HOME/.cargo/env \
@@ -171,7 +162,7 @@ pub async fn run(domain: &Domain, ip: &str) -> Result<BenchResult> {
     // -----------------------------------------------------------------------
     steps.push(
         run_step(
-            &sess,
+            domain,
             StepName::BuildRelease,
             &format!(
                 ". $HOME/.cargo/env \
@@ -190,12 +181,12 @@ pub async fn run(domain: &Domain, ip: &str) -> Result<BenchResult> {
 // ---------------------------------------------------------------------------
 
 /// Measures a single remote command with a [`Sampler`] around it.
-async fn run_step(sess: &Session, name: StepName, cmd: &str) -> Result<StepResult> {
+async fn run_step(domain: &Domain, name: StepName, cmd: &str) -> Result<StepResult> {
     println!("    {} {}…", "►".cyan(), name.to_string().bold());
 
     let sampler = Sampler::start();
 
-    let (exit_code, output_tail) = exec_ssh(sess, cmd)?;
+    let (exit_code, output_tail) = domain.exec(cmd)?;
 
     let metrics = sampler.finish().await?;
 
@@ -233,54 +224,4 @@ async fn run_step(sess: &Session, name: StepName, cmd: &str) -> Result<StepResul
     })
 }
 
-/// Opens an SSH session to `ip` authenticating with the given private key.
-async fn ssh_connect(ip: &str, port: u16, user: &str, key: &Path) -> Result<Session> {
-    // Retry for up to 60 s to handle race between VM boot and SSH daemon start.
-    let deadline = std::time::Instant::now() + Duration::from_secs(60);
 
-    loop {
-        let stream = TcpStream::connect(format!("{}:{}", ip, port));
-        if let Ok(tcp) = stream {
-            tcp.set_read_timeout(Some(Duration::from_secs(30)))?;
-            tcp.set_write_timeout(Some(Duration::from_secs(30)))?;
-
-            let mut sess = Session::new().context("Failed to create SSH session")?;
-            sess.set_tcp_stream(tcp);
-            sess.handshake().context("SSH handshake failed")?;
-            sess.userauth_pubkey_file(user, None, key, None)
-                .context("SSH public-key auth failed")?;
-
-            if sess.authenticated() {
-                return Ok(sess);
-            }
-        }
-
-        if std::time::Instant::now() > deadline {
-            bail!("SSH connection to {}:{} timed out", ip, port);
-        }
-        tokio::time::sleep(Duration::from_secs(3)).await;
-    }
-}
-
-/// Runs `cmd` on the SSH session and returns `(exit_code, output_tail)`.
-///
-/// The SSH channel is created fresh for every command so steps are independent.
-fn exec_ssh(sess: &Session, cmd: &str) -> Result<(i32, String)> {
-    let mut channel = sess.channel_session().context("SSH channel open failed")?;
-    channel.exec(cmd).context("SSH exec failed")?;
-
-    let mut output = String::new();
-    channel.read_to_string(&mut output)?;
-
-    channel.wait_close()?;
-    let exit_code = channel.exit_status()?;
-
-    // Keep only the last 4 KiB to avoid huge allocations.
-    let tail = if output.len() > 4096 {
-        output[output.len() - 4096..].to_string()
-    } else {
-        output
-    };
-
-    Ok((exit_code, tail))
-}
