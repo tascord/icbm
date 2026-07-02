@@ -7,18 +7,20 @@
 #
 # This script will:
 #   1. Download the latest icbm binary from GitHub releases.
-#   2. Download Docker CLI static binary if docker is not found (Linux only).
-#   3. Run the benchmark.
+#   2. On Linux: download the Docker CLI static binary if docker is missing.
+#   3. On macOS: download the Docker CLI *and* bootstrap Colima+Lima so
+#      containers run without Docker Desktop or admin privileges.
+#   4. Run the benchmark or any other icbm subcommand.
 #
 # Runs entirely without sudo. All downloaded binaries are placed under
-# $HOME/.local/share/icbm/bin and prepend to PATH at runtime.
+# $HOME/.local/share/icbm and prepended to PATH at runtime.
 
 set -eu
 
 REPO="https://github.com/tascord/icbm"
 CLONE_DIR="${ICBM_DIR:-$HOME/.local/share/icbm}"
 BIN_DIR="$CLONE_DIR/bin"
-RUN_PROVIDER="auto"
+LIMA_DIR="$CLONE_DIR/lima"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -44,27 +46,15 @@ detect_os_arch() {
   ARCH="$(uname -m)"
 
   case "$OS" in
-    Linux)
-      OS_NAME="linux"
-      ;;
-    Darwin)
-      OS_NAME="macos"
-      ;;
-    *)
-      err "Unsupported OS: $OS"
-      ;;
+    Linux)     OS_NAME="linux" ;;
+    Darwin)    OS_NAME="macos" ;;
+    *)         err "Unsupported OS: $OS" ;;
   esac
 
   case "$ARCH" in
-    x86_64)
-      ARCH_NAME="x86_64"
-      ;;
-    aarch64|arm64)
-      ARCH_NAME="aarch64"
-      ;;
-    *)
-      err "Unsupported architecture: $ARCH"
-      ;;
+    x86_64)    ARCH_NAME="x86_64" ;;
+    aarch64|arm64) ARCH_NAME="aarch64" ;;
+    *)         err "Unsupported architecture: $ARCH" ;;
   esac
 
   if [ "$OS_NAME" = "macos" ] && [ "$ARCH_NAME" = "x86_64" ]; then
@@ -79,7 +69,7 @@ detect_os_arch() {
 download_binary() {
   detect_os_arch
 
-  info "Detecting latest release …"
+  info "Detecting latest icbm release …"
 
   RELEASE_JSON=$(curl -sSfL "https://api.github.com/repos/tascord/icbm/releases/latest")
 
@@ -101,37 +91,19 @@ download_binary() {
 }
 
 # ---------------------------------------------------------------------------
-# 2. Ensure Docker CLI is available (Linux only)
+# 2. Ensure Docker CLI is available
 # ---------------------------------------------------------------------------
 
-ensure_docker() {
-  if command -v docker >/dev/null 2>&1; then
-    ok "docker found in PATH"
-    return 0
-  fi
-
+download_docker_cli() {
   detect_os_arch
 
-  if [ "$OS_NAME" = "macos" ]; then
-    echo ""
-    echo "  ⚠️  Docker was not found."
-    echo "  On macOS, install Docker Desktop (https://www.docker.com/products/docker-desktop/)"
-    echo "  or Colima (https://github.com/abiosoft/colima) and make sure 'docker' is in your PATH."
-    echo ""
-    err "Docker is required to run icbm."
+  if [ "$OS_NAME" = "linux" ]; then
+    DOCKER_BASE="https://download.docker.com/linux/static/stable/$ARCH_NAME/"
+  else
+    DOCKER_BASE="https://download.docker.com/mac/static/stable/$ARCH_NAME/"
   fi
 
-  info "Docker not found; downloading static Docker CLI binary …"
-
-  # Map our architecture names to Docker's published archive names
-  DOCKER_ARCH="$ARCH_NAME"
-  case "$ARCH_NAME" in
-    x86_64) DOCKER_ARCH="x86_64" ;;
-    aarch64) DOCKER_ARCH="aarch64" ;;
-  esac
-
-  # Query Docker's API for the latest stable version tag
-  DOCKER_VERSION=$(curl -sSfL "https://download.docker.com/linux/static/stable/$DOCKER_ARCH/" |
+  DOCKER_VERSION=$(curl -sSfL "$DOCKER_BASE" |
     grep -o 'href="[^"]*\.tgz"' |
     grep -v 'rootless' |
     sed 's/href="//;s/"$//' |
@@ -140,24 +112,161 @@ ensure_docker() {
     sed 's/\.tgz//')
 
   if [ -z "$DOCKER_VERSION" ]; then
-    err "Could not determine latest Docker CLI version for $DOCKER_ARCH."
+    err "Could not determine latest Docker CLI version for $OS_NAME/$ARCH_NAME."
   fi
 
-  TGZ_URL="https://download.docker.com/linux/static/stable/$DOCKER_ARCH/${DOCKER_VERSION}.tgz"
+  TGZ_URL="${DOCKER_BASE}${DOCKER_VERSION}.tgz"
   TGZ_PATH="$BIN_DIR/docker.tgz"
 
+  info "Downloading Docker CLI ($OS_NAME/$ARCH_NAME) …"
   curl -sSfL "$TGZ_URL" -o "$TGZ_PATH"
 
-  # Extract only the docker binary from the tarball
   tar -xzf "$TGZ_PATH" -C "$BIN_DIR" --strip-components=1 "docker/docker"
   rm -f "$TGZ_PATH"
   chmod +x "$BIN_DIR/docker"
 
   ok "Docker CLI downloaded to $BIN_DIR/docker"
+}
+
+# ---------------------------------------------------------------------------
+# 3. macOS: bootstrap Colima + Lima so docker works without sudo
+# ---------------------------------------------------------------------------
+
+download_lima() {
+  detect_os_arch
+
+  # Lima uses arm64/x86_64 in asset names
+  LIMA_ARCH="$ARCH_NAME"
+  case "$ARCH_NAME" in
+    aarch64) LIMA_ARCH="arm64" ;;
+  esac
+
+  LIMA_RELEASE="$(curl -sSfL "https://api.github.com/repos/lima-vm/lima/releases/latest")"
+  LIMA_TAG=$(echo "$LIMA_RELEASE" | grep -o '"tag_name": "[^"]*"' | head -1 | sed 's/.*: "//;s/"$//')
+  LIMA_VERSION="${LIMA_TAG#v}"
+  LIMA_ASSET="lima-${LIMA_VERSION}-Darwin-${LIMA_ARCH}.tar.gz"
+  LIMA_URL=$(echo "$LIMA_RELEASE" | grep -o '"browser_download_url": "[^"]*"' | grep "$LIMA_ASSET" | head -1 | sed 's/.*: "//;s/"$//')
+
+  if [ -z "$LIMA_URL" ]; then
+    err "Could not find Lima release asset '$LIMA_ASSET'."
+  fi
+
+  mkdir -p "$LIMA_DIR"
+
+  LIMA_TGZ="$LIMA_DIR/lima.tar.gz"
+  info "Downloading Lima ($LIMA_TAG) …"
+  curl -sSfL "$LIMA_URL" -o "$LIMA_TGZ"
+  tar -xzf "$LIMA_TGZ" -C "$LIMA_DIR" --strip-components=1
+  rm -f "$LIMA_TGZ"
+  ok "Lima ready at $LIMA_DIR/bin/limactl"
+}
+
+download_colima() {
+  detect_os_arch
+
+  # Colima uses arm64/x86_64 in asset names
+  COLIMA_ARCH="$ARCH_NAME"
+  case "$ARCH_NAME" in
+    aarch64) COLIMA_ARCH="arm64" ;;
+  esac
+
+  COLIMA_RELEASE="$(curl -sSfL "https://api.github.com/repos/abiosoft/colima/releases/latest")"
+  COLIMA_TAG=$(echo "$COLIMA_RELEASE" | grep -o '"tag_name": "[^"]*"' | head -1 | sed 's/.*: "//;s/"$//')
+  COLIMA_ASSET="colima-Darwin-${COLIMA_ARCH}"
+  COLIMA_URL=$(echo "$COLIMA_RELEASE" | grep -o '"browser_download_url": "[^"]*"' | grep "$COLIMA_ASSET" | head -1 | sed 's/.*: "//;s/"$//')
+
+  if [ -z "$COLIMA_URL" ]; then
+    err "Could not find Colima release asset '$COLIMA_ASSET'."
+  fi
+
+  info "Downloading Colima ($COLIMA_TAG) …"
+  curl -sSfL "$COLIMA_URL" -o "$BIN_DIR/colima"
+  chmod +x "$BIN_DIR/colima"
+  ok "Colima ready at $BIN_DIR/colima"
+}
+
+ensure_colima() {
+  # If the Colima Docker socket already works, keep using it.
+  if DOCKER_HOST="unix://$HOME/.colima/default/docker.sock" docker info >/dev/null 2>&1; then
+    ok "Colima Docker socket is alive"
+    export DOCKER_HOST="unix://$HOME/.colima/default/docker.sock"
+    return 0
+  fi
+
+  # If limactl is missing, download Lima.
+  if ! command -v limactl >/dev/null 2>&1; then
+    if [ ! -x "$LIMA_DIR/bin/limactl" ]; then
+      download_lima
+    fi
+  fi
+
+  # If colima binary is missing, download it.
+  if ! command -v colima >/dev/null 2>&1; then
+    if [ ! -x "$BIN_DIR/colima" ]; then
+      download_colima
+    fi
+  fi
+
+  # Make sure Colima can find limactl.
+  # We export PATH right before calling colima, but also set it here.
+  export PATH="$BIN_DIR:$LIMA_DIR/bin:$PATH"
+
+  # Start colima (uses Apple Virtualization.framework — no QEMU, no sudo).
+  info "Starting Colima VM (first run downloads a VM image — this may take a few minutes) …"
+  "$BIN_DIR/colima" start
+
+  # Wait for the Docker socket to appear.
+  info "Waiting for Colima Docker socket …"
+  i=0
+  while [ "$i" -lt 120 ]; do
+    if [ -S "$HOME/.colima/default/docker.sock" ]; then
+      break
+    fi
+    sleep 3
+    i=$((i + 1))
+  done
+
+  if [ ! -S "$HOME/.colima/default/docker.sock" ]; then
+    err "Timed out waiting for Colima Docker socket. Check 'colima status' manually."
+  fi
+
+  export DOCKER_HOST="unix://$HOME/.colima/default/docker.sock"
+  ok "Colima VM ready"
+}
+
+# ---------------------------------------------------------------------------
+# 4. Top-level runtime check
+# ---------------------------------------------------------------------------
+
+ensure_runtime() {
+  # First, do we already have a working Docker?
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    ok "docker daemon reachable"
+    return 0
+  fi
+
+  # No working Docker. Download the CLI first.
+  if ! command -v docker >/dev/null 2>&1; then
+    download_docker_cli
+  fi
+
+  detect_os_arch
+
+  if [ "$OS_NAME" = "macos" ]; then
+    ensure_colima
+    return 0
+  fi
+
+  # Linux: CLI is downloaded but we can't start the daemon ourselves.
   echo ""
-  echo "  ℹ️  Make sure you have a Docker daemon running and that your user"
-  echo "     is in the 'docker' group (or the socket is otherwise accessible)."
+  echo "  ℹ️  Docker CLI downloaded to $BIN_DIR/docker"
+  echo "     A Docker daemon is still required. Options:"
+  echo "       • Rootless Docker (https://docs.docker.com/engine/security/rootless/)"
+  echo "       • Docker Desktop / docker-ce (add your user to the 'docker' group)"
   echo ""
+  if ! "$BIN_DIR/docker" info >/dev/null 2>&1; then
+    err "Docker daemon is not accessible."
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -167,13 +276,34 @@ ensure_docker() {
 # 1. Download icbm binary
 download_binary
 
-# 2. Ensure Docker is available (downloads static binary on Linux if missing)
-ensure_docker
+# 2. Determine command — default is 'run'
+COMMAND="run"
+for arg in "$@"; do
+  case "$arg" in
+    -*) ;;
+    host-info|version|help|--help|--version)
+      COMMAND="$arg"
+      break
+      ;;
+    run)
+      COMMAND="run"
+      break
+      ;;
+    *)
+      COMMAND="run"
+      break
+      ;;
+  esac
+done
 
-# 3. Make sure our private bin directory is first on PATH so the downloaded
-#    docker binary is found even if the user didn't have one globally.
-export PATH="$BIN_DIR:$PATH"
+# 3. Only ensure a container runtime when actually running benchmarks.
+if [ "$COMMAND" = "run" ]; then
+  ensure_runtime
+fi
 
-# 4. Run the benchmark
-info "Launching benchmark …"
-"$BIN_DIR/icbm" run --provider "$RUN_PROVIDER" "$@"
+# 4. Make sure our private bin directories are first on PATH.
+export PATH="$BIN_DIR:$LIMA_DIR/bin:$PATH"
+
+# 5. Run icbm, passing through any user-supplied arguments.
+info "Launching icbm …"
+"$BIN_DIR/icbm" "$@"

@@ -10,9 +10,10 @@ curl -sSf https://raw.githubusercontent.com/tascord/icbm/main/install.sh | sh
 ```
 
 The installer downloads the `icbm` binary and, on Linux, will also download the
-Docker CLI static binary if `docker` is not already in your `PATH`. On macOS you
-need Docker Desktop, Colima, or Podman Machine running before running the
-installer — it will not install Docker for you.
+Docker CLI static binary if `docker` is not already in your `PATH`. On macOS it
+downloads the Docker CLI *and* bootstraps **Colima + Lima** automatically, so
+containers run without Docker Desktop or admin privileges. First run downloads a
+VM image; this may take a few minutes.
 
 ### build
 ```
