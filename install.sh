@@ -166,9 +166,25 @@ if [ "$DEPS_MISSING" -eq 1 ]; then
   }
 
   install_deps_macos() {
+    # Xcode Command Line Tools are required by Homebrew (and by many build tools).
+    if ! xcode-select -p >/dev/null 2>&1; then
+      info "Xcode Command Line Tools not found – triggering install dialog …"
+      xcode-select --install
+      echo ""
+      echo "  A system dialog has opened to install Xcode Command Line Tools."
+      echo "  Please complete that installation and then re-run this script."
+      exit 1
+    fi
+    ok "Xcode Command Line Tools found"
+
     if ! command -v brew >/dev/null 2>&1; then
-      info "Homebrew not found – installing …"
-      NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+      info "Homebrew not found – installing to ~/.homebrew (no sudo required) …"
+      BREW_PREFIX="$HOME/.homebrew"
+      mkdir -p "$BREW_PREFIX"
+      curl -fsSL https://github.com/Homebrew/brew/tarball/master \
+        | tar xz --strip-components 1 -C "$BREW_PREFIX"
+      # Make brew available in the current shell session.
+      eval "$("$BREW_PREFIX/bin/brew" shellenv)"
     fi
 
     # colima + docker CLI: runs entirely in user-space (no sudo required).
