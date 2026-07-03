@@ -33,6 +33,17 @@ need() {
   }
 }
 
+download() {
+  # Wrapper around curl with retry logic and optional auth token.
+  local url="$1"
+  local out="$2"
+  if [ -n "${GITHUB_TOKEN:-}" ]; then
+    curl -sSfL --retry 3 --retry-delay 2 -H "Authorization: token $GITHUB_TOKEN" -o "$out" "$url"
+  else
+    curl -sSfL --retry 3 --retry-delay 2 -o "$out" "$url"
+  fi
+}
+
 info()  { printf '\033[1;36m==> \033[0m%s\n' "$*"; }
 ok()    { printf '\033[1;32m ✓  \033[0m%s\n' "$*"; }
 err()   { printf '\033[1;31m ✗  \033[0m%s\n' "$*" >&2; exit 1; }
@@ -52,14 +63,10 @@ detect_os_arch() {
   esac
 
   case "$ARCH" in
-    x86_64)    ARCH_NAME="x86_64" ;;
+    x86_64|amd64)    ARCH_NAME="x86_64" ;;
     aarch64|arm64) ARCH_NAME="aarch64" ;;
     *)         err "Unsupported architecture: $ARCH" ;;
   esac
-
-  if [ "$OS_NAME" = "macos" ] && [ "$ARCH_NAME" = "x86_64" ]; then
-    err "macOS Intel (x86_64) is not supported. Only Apple Silicon (aarch64) is supported."
-  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -71,7 +78,12 @@ download_binary() {
 
   info "Detecting latest icbm release …"
 
-  RELEASE_JSON=$(curl -sSfL "https://api.github.com/repos/tascord/icbm/releases/latest")
+  RELEASE_JSON=$(curl -sSfL --retry 3 --retry-delay 2 "https://api.github.com/repos/tascord/icbm/releases/latest")
+
+  # Detect and report GitHub API rate-limiting early.
+  if echo "$RELEASE_JSON" | grep -q '"message":"API rate limit exceeded"'; then
+    err "GitHub API rate limit exceeded. Set a GITHUB_TOKEN environment variable to avoid this."
+  fi
 
   ASSET_NAME="icbm-$OS_NAME-$ARCH_NAME"
   DOWNLOAD_URL=$(echo "$RELEASE_JSON" | grep -o '"browser_download_url": "[^"]*"' | grep "$ASSET_NAME" | head -1 | sed 's/.*: "//;s/"$//')
@@ -84,8 +96,12 @@ download_binary() {
   ICBM_BIN="$BIN_DIR/icbm"
 
   info "Downloading icbm binary …"
-  curl -sSfL "$DOWNLOAD_URL" -o "$ICBM_BIN"
+  download "$DOWNLOAD_URL" "$ICBM_BIN"
   chmod +x "$ICBM_BIN"
+
+  if [ ! -s "$ICBM_BIN" ]; then
+    err "Downloaded icbm binary is empty or missing."
+  fi
 
   ok "Binary ready at $ICBM_BIN"
 }
@@ -119,11 +135,15 @@ download_docker_cli() {
   TGZ_PATH="$BIN_DIR/docker.tgz"
 
   info "Downloading Docker CLI ($OS_NAME/$ARCH_NAME) …"
-  curl -sSfL "$TGZ_URL" -o "$TGZ_PATH"
+  download "$TGZ_URL" "$TGZ_PATH"
 
   tar -xzf "$TGZ_PATH" -C "$BIN_DIR" --strip-components=1 "docker/docker"
   rm -f "$TGZ_PATH"
   chmod +x "$BIN_DIR/docker"
+
+  if [ ! -x "$BIN_DIR/docker" ]; then
+    err "Docker CLI extraction failed."
+  fi
 
   ok "Docker CLI downloaded to $BIN_DIR/docker"
 }
@@ -141,7 +161,10 @@ download_lima() {
     aarch64) LIMA_ARCH="arm64" ;;
   esac
 
-  LIMA_RELEASE="$(curl -sSfL "https://api.github.com/repos/lima-vm/lima/releases/latest")"
+  LIMA_RELEASE="$(curl -sSfL --retry 3 --retry-delay 2 "https://api.github.com/repos/lima-vm/lima/releases/latest")"
+  if echo "$LIMA_RELEASE" | grep -q '"message":"API rate limit exceeded"'; then
+    err "GitHub API rate limit exceeded while fetching Lima release. Set GITHUB_TOKEN to avoid this."
+  fi
   LIMA_TAG=$(echo "$LIMA_RELEASE" | grep -o '"tag_name": "[^"]*"' | head -1 | sed 's/.*: "//;s/"$//')
   LIMA_VERSION="${LIMA_TAG#v}"
   LIMA_ASSET="lima-${LIMA_VERSION}-Darwin-${LIMA_ARCH}.tar.gz"
@@ -155,9 +178,14 @@ download_lima() {
 
   LIMA_TGZ="$LIMA_DIR/lima.tar.gz"
   info "Downloading Lima ($LIMA_TAG) …"
-  curl -sSfL "$LIMA_URL" -o "$LIMA_TGZ"
+  download "$LIMA_URL" "$LIMA_TGZ"
   tar -xzf "$LIMA_TGZ" -C "$LIMA_DIR" --strip-components=1
   rm -f "$LIMA_TGZ"
+
+  if [ ! -x "$LIMA_DIR/bin/limactl" ]; then
+    err "Lima extraction failed — limactl not found."
+  fi
+
   ok "Lima ready at $LIMA_DIR/bin/limactl"
 }
 
@@ -170,7 +198,10 @@ download_colima() {
     aarch64) COLIMA_ARCH="arm64" ;;
   esac
 
-  COLIMA_RELEASE="$(curl -sSfL "https://api.github.com/repos/abiosoft/colima/releases/latest")"
+  COLIMA_RELEASE="$(curl -sSfL --retry 3 --retry-delay 2 "https://api.github.com/repos/abiosoft/colima/releases/latest")"
+  if echo "$COLIMA_RELEASE" | grep -q '"message":"API rate limit exceeded"'; then
+    err "GitHub API rate limit exceeded while fetching Colima release. Set GITHUB_TOKEN to avoid this."
+  fi
   COLIMA_TAG=$(echo "$COLIMA_RELEASE" | grep -o '"tag_name": "[^"]*"' | head -1 | sed 's/.*: "//;s/"$//')
   COLIMA_ASSET="colima-Darwin-${COLIMA_ARCH}"
   COLIMA_URL=$(echo "$COLIMA_RELEASE" | grep -o '"browser_download_url": "[^"]*"' | grep "$COLIMA_ASSET" | head -1 | sed 's/.*: "//;s/"$//')
@@ -180,8 +211,13 @@ download_colima() {
   fi
 
   info "Downloading Colima ($COLIMA_TAG) …"
-  curl -sSfL "$COLIMA_URL" -o "$BIN_DIR/colima"
+  download "$COLIMA_URL" "$BIN_DIR/colima"
   chmod +x "$BIN_DIR/colima"
+
+  if [ ! -x "$BIN_DIR/colima" ]; then
+    err "Colima download failed — binary is missing or not executable."
+  fi
+
   ok "Colima ready at $BIN_DIR/colima"
 }
 
@@ -213,7 +249,11 @@ ensure_colima() {
 
   # Start colima (uses Apple Virtualization.framework — no QEMU, no sudo).
   info "Starting Colima VM (first run downloads a VM image — this may take a few minutes) …"
-  "$BIN_DIR/colima" start
+  COLIMA_BIN="$BIN_DIR/colima"
+  if command -v colima >/dev/null 2>&1; then
+    COLIMA_BIN="$(command -v colima)"
+  fi
+  "$COLIMA_BIN" start
 
   # Wait for the Docker socket to appear.
   info "Waiting for Colima Docker socket …"

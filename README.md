@@ -15,6 +15,15 @@ downloads the Docker CLI *and* bootstraps **Colima + Lima** automatically, so
 containers run without Docker Desktop or admin privileges. First run downloads a
 VM image; this may take a few minutes.
 
+**What gets downloaded?**
+
+| Host OS | Architecture | `icbm` binary | Docker CLI | VM runtime |
+|---------|-------------|---------------|------------|------------|
+| Linux   | x86_64      | musl static   | static tgz | — (use your own) |
+| Linux   | aarch64     | musl static   | static tgz | — (use your own) |
+| macOS   | x86_64      | native        | static tgz | Colima + Lima |
+| macOS   | aarch64     | native        | static tgz | Colima + Lima |
+
 ### build
 ```
 # Prerequisites: Rust stable, Docker (or Colima / Podman on macOS)
